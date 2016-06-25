@@ -1,0 +1,7 @@
+-- Below is a template/example of Before IBExpert stops event block
+execute ibeblock
+as
+begin
+  exit;
+  ibec_ShowMessage('IBExpert is almost stopped.');
+end

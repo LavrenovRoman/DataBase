@@ -1,0 +1,302 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'Procedure name to be copied',
+  DestObjectName variant = '' comment 'Destination procedure name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyDomains boolean = TRUE comment 'Copy domains',
+  DropPackageIfExists boolean = FALSE comment 'Try to drop package if the one exists in the destination database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'localHOST/3070:D:\FB25_DATA\TESTFB21.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird25\bin\fbclient.dll';
+  
+    DestDBConnStr = 'localHOST/3070:D:\FB25_DATA\TESTFB21.FBA';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird25\bin\fbclient.dll';
+  
+    SrcObjectName = 'TEST';
+    DestObjectName = 'TEST_PKG';
+    DropPackageIfExists = TRUE;
+  end;
+
+  SrcPackageName = SrcObjectName;
+  DestPackageName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$package_name, rdb$package_header_source, rdb$package_body_source, rdb$description
+           from rdb$packages
+           where rdb$package_name = :SrcPackageName
+           into :SrcPackageData;
+
+    if (SrcPackageData['RDB$PACKAGE_NAME'] is null) then
+      exception cant_find_package 'There is no such package (' + :SrcPackageName + ') in the source database.';
+
+    if ((DestPackageName is null) or (DestPackageName = ''))  then
+      DestPackageName = SrcPackageName;
+
+    DestPackageNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestPackageName, '"'), ibec_AnsiUpperCase(:DestPackageName));
+    SrcPackageNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcPackageName, '"'), ibec_AnsiUpperCase(:SrcPackageName));
+
+    ibec_UseConnection(DestDB);
+
+    if (exists(select rdb$package_name from rdb$packages where rdb$package_name = :DestPackageName)) then
+    begin
+      if (DropPackageIfExists) then
+      begin
+        DropStmt = 'DROP PACKAGE ' + :DestPackageNameFmt;
+
+        try
+          ibec_Progress('Dropping package ' + :DestPackageNameFmt + '...');
+          execute statement :DropStmt;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+      else
+        exception package_exists_already 'Package "' + DestPackageName + '" exists in the destination database already.';
+    end
+
+    ibec_UseConnection(SrcDB);
+    ibec_Progress('Collecting domains info...');
+    i = 0;
+    iUserDomainCount = 0;
+    for with params (object_type, object_name, param_name,  dom_name, param_description)
+        as (
+             select 1,
+                    pp.rdb$procedure_name,
+                    pp.rdb$parameter_name,
+                    pp.rdb$field_source,
+                    pp.rdb$description
+             from rdb$procedure_parameters pp
+             where (pp.rdb$package_name = :SrcPackageName)
+             union all
+             select 2,
+                    fa.rdb$function_name,
+                    fa.rdb$argument_name,
+                    fa.rdb$field_source,
+                    fa.rdb$description
+             from rdb$function_arguments fa
+             where (fa.rdb$package_name = :SrcPackageName)
+           )
+        select p.object_type as object_type,
+               p.object_name as object_name,
+               p.param_name as param_name,
+               p.dom_name as dom_name,
+               p.param_description as param_description,
+               f.rdb$field_type as dom_type,
+               f.rdb$field_length as dom_length,
+               f.rdb$field_sub_type as dom_subtype,
+               f.rdb$field_scale as dom_scale,
+               f.rdb$null_flag as dom_null_flag,
+               f.rdb$character_length as dom_charlen,
+               f.rdb$segment_length as dom_seglen,
+               f.rdb$system_flag as dom_system_flag,
+               f.rdb$computed_source as dom_computedby,
+               f.rdb$default_source as dom_default,
+               f.rdb$dimensions as dom_dims,
+               f.rdb$description as dom_description,
+               ch.rdb$character_set_name as dom_charset,
+               ch.rdb$bytes_per_character as charset_bytes,
+               dco.rdb$collation_name as dom_collation,
+               f.rdb$field_precision as dom_precision
+               from params p
+               left join rdb$fields f on p.dom_name = f.rdb$field_name
+               left join rdb$character_sets ch on f.rdb$character_set_id = ch.rdb$character_set_id
+               left join rdb$collations dco on ((f.rdb$collation_id = dco.rdb$collation_id) and (f.rdb$character_set_id = dco.rdb$character_set_id))
+        into :ParamData
+    do
+    begin
+      sParamDomain = ibec_Trim(ParamData['DOM_NAME']);
+      if (ibec_Pos('RDB$', sParamDomain) <> 1)  then
+      begin
+        aDomains[i] = sParamDomain;
+        aDomainsComment[i] = ibec_Coalesce(ParamData['DOM_DESCRIPTION'], '');
+        iUserDomainCount = iUserDomainCount + 1;
+      end;
+
+      sType = ibec_IBTypeToStr(ParamData['DOM_TYPE'],
+                               ParamData['DOM_SUBTYPE'],
+                               ParamData['DOM_LENGTH'],
+                               ParamData['DOM_SCALE'],
+                               ParamData['DOM_SEGLEN'],
+                               ParamData['DOM_CHARLEN'],
+                               ParamData['DOM_PRECISION'],
+                               DestDBSQLDialect);
+
+      if (ParamData['DOM_CHARSET'] is not null) then
+        sType .= ' CHARACTER SET ' + ibec_Trim(ParamData['DOM_CHARSET']);
+      if ((ParamData['DOM_DEFAULT'] is not null) and (ParamData['DOM_DEFAULT'] <> '')) then
+      begin
+        sDefault = ibec_Trim(ParamData['DOM_DEFAULT']);
+        sDefault = ibec_preg_Replace('^(?i)DEFAULT[\x01-\x20]+', '', sDefault);
+        sType .= CRLF + 'DEFAULT ' + sDefault;
+      end;
+      if (ParamData['DOM_NULL_FLAG'] = 1) then
+        sType .= CRLF + 'NOT NULL';
+      if ((ParamData['DOM_CHECK'] is not null) and (ParamData['DOM_CHECK'] <> '')) then
+        sType .= CRLF + ibec_Trim(ParamData['DOM_CHECK']);
+      if ((ParamData['DOM_COLLATION'] is not null) and (ParamData['DOM_COLLATION'] <> '')) then
+        sType .= CRLF + 'COLLATE ' + ibec_Trim(ParamData['DOM_COLLATION']);
+
+      aTypes[i] = sType;
+
+      ParamDesc = ibec_Coalesce(ParamData['PARAM_DESCRIPTION'], '');
+
+      if (ParamDesc <> '') then
+      begin
+        sCommentOn = 'COMMENT ON %s PARAMETER %s.%s.%s IS %s';
+        sObjectType = ibec_iif(ParamData['OBJECT_TYPE'] = 2, 'FUNCTION', 'PROCEDURE');
+        ParamName = ParamData['PARAM_NAME'];
+        ParamNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:ParamName, '"'), ibec_AnsiUpperCase(:ParamName));
+        ObjectName = ParamData['OBJECT_NAME'];
+        ObjectNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:ObjectName, '"'), ibec_AnsiUpperCase(:ObjectName));
+        aParamDesc[i] = ibec_Format(sCommentOn, sObjectType, DestPackageNameFmt, ObjectNameFmt, ParamNameFmt, ibec_QuotedStr(ParamDesc, ''''));
+      end
+      i = i + 1;
+    end
+
+    ibec_UseConnection(DestDB);
+    DomainsAreOK = TRUE;
+    if (CopyDomains and (iUserDomainCount > 0)) then
+    begin
+      foreach (aDomains as Dom key DomIdx skip nulls) do
+      begin
+        if (exists(select rdb$field_name from rdb$fields where rdb$field_name = :Dom)) then
+          Continue;
+        DomNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:Dom, '"'), ibec_AnsiUpperCase(:Dom));
+        CreateStmt = 'CREATE DOMAIN ' + DomNameFmt + ' AS ' +  sType;
+        try
+          ibec_Progress('Creating domain ' + DomNameFmt + '...');
+          execute statement :CreateStmt;
+          commit;
+          ibec_Progress(Success);
+          DomainDesc = aDomainsComment[DomIdx];
+          if (DomainDesc <> '') then
+          begin
+            sCommentOnDomain = ibec_Format('COMMENT ON DOMAIN %s IS %s', DomNameFmt, ibec_QuotedStr(DomainDesc, ''''));
+            ibec_Progress('Setting domain description...');
+            execute statement :sCommentOnDomain;
+            commit;
+            ibec_Progress(Success);
+          end;
+        except
+          DomainsAreOK = FALSE;
+          ibec_Progress(Failed);
+          rollback;
+        end;
+      end;
+    end;
+
+    CreateHeaderStmt = 'CREATE PACKAGE ' + DestPackageNameFmt + CRLF + 'AS' + CRLF + SrcPackageData['RDB$PACKAGE_HEADER_SOURCE'];
+    CreateBodyStmt = 'CREATE PACKAGE BODY ' + DestPackageNameFmt + CRLF + 'AS' + CRLF + SrcPackageData['RDB$PACKAGE_BODY_SOURCE'];
+
+    try
+      ibec_Progress('Creating package ' + DestPackageNameFmt + '...');
+      execute statement :CreateHeaderStmt;
+      execute statement :CreateBodyStmt;
+      commit;
+      ibec_Progress(Success);
+
+      if (SrcPackageData['RDB$DESCRIPTION'] is not null) then
+      begin
+        PackageDesc = SrcPackageData['RDB$DESCRIPTION'];
+        sCommentOnPackage = ibec_Format('COMMENT ON PACKAGE %s IS %s', DestPackageNameFmt, ibec_QuotedStr(PackageDesc, ''''));
+        ibec_Progress('Setting package description...');
+        execute statement :sCommentOnPackage;
+        commit;
+        ibec_Progress(Success);
+      end
+
+      foreach (aParamDesc as ParamDesc key ParamDescIdx skip nulls) do
+      begin
+        ibec_Progress('Setting parameter description...');
+        execute statement :aParamDesc;
+        commit;
+        ibec_Progress(Success);
+      end
+    except
+      ibec_Progress(Failed);
+      rollback;
+      raise;
+    end;
+
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

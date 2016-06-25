@@ -1,0 +1,69 @@
+execute ibeblock (
+  CodeDir varchar(1000) = 'E:\IBEBlocks\' comment 'Path to necessary IBEBlocks',
+  FileStrm variant)
+as
+begin
+  FldTypeFunc = ibec_LoadFromFile(CodeDir || 'FldType.ibeblock');
+
+  if (FileStrm is not null) then
+    FS = FileStrm;
+  else
+    FS = ibec_fs_OpenFile('E:\BlockScript.sql', __fmCreate);
+
+  for select f.rdb$field_name,          -- 0
+             f.rdb$validation_source,   -- 1
+             f.rdb$computed_source,     -- 2
+             f.rdb$default_source,      -- 3
+             f.rdb$field_length,        -- 4
+             f.rdb$field_scale,         -- 5
+             f.rdb$field_type,          -- 6
+             f.rdb$field_sub_type,      -- 7
+             f.rdb$description,         -- 8
+             f.rdb$segment_length,      -- 9
+             f.rdb$dimensions,          -- 10
+             f.rdb$null_flag,           -- 11
+             f.rdb$character_length,    -- 12
+             f.rdb$collation_id,        -- 13
+             f.rdb$character_set_id,    -- 14
+             f.rdb$field_precision,     -- 15
+             ch.rdb$character_set_name, -- 16
+             co.rdb$collation_name      -- 17
+      from rdb$fields f
+      left join rdb$character_sets ch on (f.rdb$character_set_id = ch.rdb$character_set_id)
+      left join rdb$collations co on ((f.rdb$collation_id = co.rdb$collation_id) and (f.rdb$character_set_id = co.rdb$character_set_id))
+      where not (f.rdb$field_name starting with 'RDB$')
+      order by rdb$field_name
+      into :DomProps
+  do
+  begin
+    DomName = DomProps[0];
+    execute ibeblock FldTypeFunc(DomProps[6], DomProps[7], DomProps[4], DomProps[5], DomProps[9],
+                                 DomProps[12], DomProps[15], 3)
+            returning_values :FieldType;
+    DomType = FieldType;
+
+    -- Character Set
+    if ((DomProps[6] in (14, 37, 261)) and (DomProps[16] is not null)) then
+      DomType = DomType || ' CHARACTER SET ' || ibec_trim(DomProps[16]) || ibec_Chr(13) || ibec_Chr(10);
+    -- Default Value
+    if ((DomProps[3] is not null) and (DomProps[3] <> '')) then
+      DomType = DomType || ibec_trim(DomProps[3]) || ibec_Chr(13) || ibec_Chr(10);
+    -- NOT NULL flag
+    if (DomProps[11] is not null) then
+      DomType = DomType || 'NOT NULL' || ibec_Chr(13) || ibec_Chr(10);
+    -- Check source
+    if ((DomProps[1] is not null) and (DomProps[1] <> '')) then
+      DomType = DomType || ibec_trim(DomProps[1]) || ibec_Chr(13) || ibec_Chr(10);
+    -- Collate
+    if ((DomProps[17] is not null) and (DomProps[17] <> '')) then
+        DomType = DomType || 'COLLATE ' || ibec_trim(DomProps[17]) || ibec_Chr(13) || ibec_Chr(10);
+
+    DomType = ibec_Chr(13) || ibec_Chr(10) || ibec_Trim(DomType) || ';';
+    ibec_progress('Writing domain ' || DomName);
+    ibec_fs_Writeln(FS, 'CREATE DOMAIN ' || ibec_Trim(DomProps[0]) || DomType);
+    ibec_fs_Writeln(FS, '');
+  end
+
+  if (FileStrm is null) then
+    ibec_fs_CloseFile(FS);
+end

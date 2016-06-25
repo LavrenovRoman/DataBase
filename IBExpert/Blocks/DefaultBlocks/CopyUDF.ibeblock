@@ -1,0 +1,275 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'UDF name to be copied',
+  DestObjectName variant = '' comment 'Destination UDF name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyUDFDescription boolean = TRUE comment 'Copy description',
+  IfUDFExists enum ('Do nothing, exit',
+                    'Drop and recreate UDF') = 0 comment 'If UDF exists in the target database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'AVX-MAIN:D:\FB2_DATA\IBEHELP.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    DestDBConnStr = 'AVX-MAIN:D:\FB2_DATA\FORMTEST.FDB';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+    SrcObjectName = 'F_BLOBLEFT';
+    DestObjectName = 'F_BLOBLEFT';
+    IfUDFExists = 1;
+  end;
+
+  SrcUDFName = SrcObjectName;
+  DestUDFName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    bSrcPackages = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+
+    SelStmt = 'select rdb$function_name, rdb$entrypoint, rdb$module_name, rdb$return_argument, rdb$description' + CRLF +
+              'from rdb$functions' + CRLF +
+              'where (rdb$function_name = ' +  ibec_QuotedStr(:SrcUDFName, '''') + ')';
+    if (bSrcPackages) then
+      SelStmt = SelStmt + CRLF + 'and (rdb$package_name is null)';
+
+    execute statement SelStmt into :SrcUDFData;
+
+    if (SrcUDFData['RDB$FUNCTION_NAME'] is null) then
+      exception cant_find_udf 'There is no such UDF (' + :SrcUDFName + ') in the source database.';
+
+    if ((DestUDFName is null) or (DestUDFName = ''))  then
+      DestUDFName = SrcUDFName;
+
+    DestUDFNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestUDFName, '"'), ibec_AnsiUpperCase(:DestUDFName));
+    SrcUDFNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcUDFName, '"'), ibec_AnsiUpperCase(:SrcUDFName));
+
+    ibec_UseConnection(DestDB);
+
+    if (exists(select rdb$function_name from rdb$functions where rdb$function_name = :DestUDFName)) then
+    begin
+      if (IfUDFExists = 0) then
+      begin
+        ibec_Progress('UDF "' + DestUDFName + '" exists in the destination database already.');
+        Exit;
+      end;
+      else if (IfUDFExists = 1) then
+      begin
+        sDrop = 'DROP EXTERNAL FUNCTION ' + DestUDFNameFmt;
+        try
+          ibec_Progress('Dropping UDF ' + DestUDFNameFmt + '...');
+          execute statement sDrop;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+    end
+    
+    ibec_UseConnection(SrcDB);
+
+    select rdb$field_name
+           from rdb$relation_fields
+           where (rdb$relation_name = 'RDB$FUNCTION_ARGUMENTS') and
+                 (rdb$field_name = 'RDB$FIELD_PRECISION')
+           into :bPrecision;
+    bPrecision = ibec_IIF(:bPrecision is NULL, FALSE, TRUE);
+
+    sSelect = 'select fa.rdb$argument_position,' +
+              'fa.rdb$mechanism,' +
+              'fa.rdb$field_type,' +
+              'fa.rdb$field_scale,' +
+              'fa.rdb$field_length,' +
+              'fa.rdb$field_sub_type,' +
+              'c.rdb$bytes_per_character,' +
+              'c.rdb$character_set_name,';
+    if (bPrecision) then
+      sSelect .= 'fa.rdb$field_precision';
+    else
+      sSelect .= 'cast(0 as integer) as rdb$field_precision';
+
+    sSelect .= CRLF +
+               'from rdb$function_arguments fa' + CRLF +
+               'left join rdb$character_sets c on fa.rdb$character_set_id = c.rdb$character_set_id' + CRLF +
+               'where (fa.rdb$function_name = ' + ibec_QuotedStr(SrcUDFName, '''') + ')';
+     if (bSrcPackages) then
+       sSelect = sSelect + CRLF + 'and (rdb$package_name is null)';
+
+     sSelect = sSelect + CRLF + 'order by fa.rdb$argument_position';
+
+
+    iReturnArgument = SrcUDFData['RDB$RETURN_ARGUMENT'];
+    i = 0;
+    for execute statement sSelect into :ArgData
+    do
+    begin
+      iBPC = ArgData['RDB$BYTES_PER_CHARACTER'];
+      iCharLength = 0;
+      if ((iBPC is not null) and (iBPC <> 0)) then
+        iCharLength = ibec_div(ArgData['RDB$FIELD_LENGTH'], iBPC);
+      sType = ibec_IBTypeToStr(ArgData['RDB$FIELD_TYPE'],
+                               ArgData['RDB$FIELD_SUB_TYPE'],
+                               ArgData['RDB$FIELD_LENGTH'],
+                               ArgData['RDB$FIELD_SCALE'],
+                               0,
+                               iCharLength,
+                               ArgData['RDB$FIELD_PRECISION'],
+                               DestDBSQLDialect);
+      if (ArgData['RDB$FIELD_TYPE'] = 261) then
+        sType = 'BLOB';
+      if ((ArgData['RDB$CHARACTER_SET_NAME'] is not null) and
+          ((iReturnArgument <> 0) or (i <> iReturnArgument))) then
+        sType .= ' CHARACTER SET ' + ibec_Trim(ArgData['RDB$CHARACTER_SET_NAME']);
+      aTypes[i] = sType;
+      aMechanismes[i] = ArgData['RDB$MECHANISM'];
+      i = i + 1;
+    end;
+
+    sInArguments = '';
+    foreach (aTypes as Arg key ArgIdx skip nulls) do
+    begin
+      if ((iReturnArgument = 0) and (ArgIdx = 0)) then
+        Continue;
+      if (sInArguments <> '') then
+        sInArguments .= ',' + CRLF;
+      sInArguments .= '  ' + Arg;
+      if (aMechanismes[ArgIdx] = 2) then
+        sInArguments .= ' BY DESCRIPTOR';
+      else if (aMechanismes[ArgIdx] = 5) then
+        sInArguments .= ' NULL';
+    end;
+
+
+    ByValue = FALSE;
+    if (iReturnArgument > 0) then
+      sReturns = 'PARAMETER ' + ibec_Cast(iReturnArgument, __typeString);
+    else
+    begin
+      ByValue = ibec_IIF(aMechanismes[iReturnArgument] = 0, TRUE, FALSE);
+      sReturns = aTypes[iReturnArgument];
+    end;
+    if (ByValue) then
+      sReturns .= ' BY VALUE';
+    else if ((not ByValue) and (iReturnArgument = 0) and (aMechanismes[iReturnArgument] = -1)) then
+      sReturns .= ' FREE_IT';
+    else if (aMechanismes[iReturnArgument] = 2) then
+      sReturns .= ' BY DESCRIPTOR';
+
+    CreateUDFStmt = 'DECLARE EXTERNAL FUNCTION ' + DestUDFNameFmt + CRLF +
+                    sInArguments + CRLF +
+                    'RETURNS ' + sReturns + CRLF +
+                    'ENTRY_POINT ' + ibec_QuotedStr(ibec_Trim(SrcUDFData['RDB$ENTRYPOINT']), '''') +
+                    ' MODULE_NAME ' + ibec_QuotedStr(ibec_Trim(SrcUDFData['RDB$MODULE_NAME']), '''');
+
+    ibec_UseConnection(DestDB);
+    try
+      ibec_Progress('Creating UDF ' + DestUDFNameFmt + '...');
+      execute statement :CreateUDFStmt;
+      commit;
+      ibec_Progress(Success);
+    except
+      ibec_Progress(Failed);
+      rollback;
+      raise;
+    end;
+    
+    if (CopyUDFDescription and (SrcUDFData['RDB$DESCRIPTION'] is not null)) then
+    begin
+      bDestPackages = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+      sDesc = SrcUDFData['RDB$DESCRIPTION'];
+      UDFName = ibec_IIF(DestDBSQLDialect = 3, :DestUDFName, ibec_AnsiUpperCase(:DestUDFName));
+      try
+        ibec_Progress('Setting UDF description...');
+        sCommentOnFunc = ibec_Format('COMMENT ON FUNCTION %s IS %s', DestUDFNameFmt, ibec_QuotedStr(sDesc, ''''));
+        if (bDestPackages) then
+          execute statement :sCommentOnFunc;
+        else
+          update rdb$functions set rdb$description = :sDesc
+                 where (rdb$function_name = :UDFName);
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+      end;
+    end;
+    
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

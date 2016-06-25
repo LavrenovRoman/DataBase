@@ -1,0 +1,41 @@
+/********************************************************************************/
+/* Following IBEBlock is used by IBExpert to produce a text of DELETE procedure */
+/********************************************************************************/
+
+execute ibeblock (
+  TableName     variant comment 'Table name AS IS',
+  TableNameFmt  variant comment 'Formatted table name (quoted, if necessary)',
+  KeyFields     variant comment 'Array of key field names (names are quoted, if necessary)',
+  KeyFieldTypes variant comment 'Array of key field types')
+RETURNS (
+  SPText      variant = ''    comment 'DELETE procedure text',
+  DoNotFormat boolean = FALSE comment 'If TRUE, no additional formatting will be performed')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  CRLF = ibec_CRLF();
+  SPName = ibec_FormatIdent(TableName + '_DEL');
+  SPText = 'CREATE PROCEDURE ' + SPName + ' (' + CRLF;
+
+  InParamsStr = '';
+  WhereStr = '';
+  if (KeyFields is not null) then
+  begin
+    UpperBound = ibec_High(KeyFields);
+    for i = 0 to UpperBound do
+    begin
+      InParamsStr = InParamsStr + '  ' + KeyFields[i] + ' ' + KeyFieldTypes[i];
+      WhereStr = WhereStr + '(' + KeyFields[i] + ' = :' + KeyFields[i] + ')';
+      if (i < UpperBound) then
+      begin
+        InParamsStr = InParamsStr + ',' + CRLF;
+        WhereStr = WhereStr + ' AND ';
+      end;
+    end;
+  end;
+
+  SPText = SPText + InParamsStr + ')' + CRLF + 'AS' + CRLF + 'BEGIN' + CRLF +
+           '  DELETE FROM ' + TableNameFmt + CRLF + '  WHERE ' + WhereStr + ';' + CRLF + 'END';
+end

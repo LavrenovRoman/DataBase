@@ -1,0 +1,8 @@
+-- Below is a template/example of After disconnet from database event block
+execute ibeblock(
+  DatabaseID integer 'Internal ID (within IBExpert) of the disconnected database',
+  IsReconnect boolean 'Indicates that Reconnect is performing for active database')
+as
+begin
+  exit;
+end

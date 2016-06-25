@@ -1,0 +1,464 @@
+execute ibeblock
+as
+begin
+  Time1 = ibec_GetTickCount();
+  ErrCount = 0;
+
+  if (ibec_FileExists('D:\NEWBLOCKDEMO.FBK')) then
+    ibec_DeleteFile('D:\NEWBLOCKDEMO.FBK');
+
+  if (ibec_FileExists('D:\NEWBLOCKDEMO.FB2')) then
+    ibec_DeleteFile('D:\NEWBLOCKDEMO.FB2');
+
+  ibec_Progress('Backing up the database...');
+  res = ibec_BackupDatabase('localhost:D:\FB2_DATA\IBEHELP.FBA',
+                            'D:\NEWBLOCKDEMO.FBK',
+                            'ClientLib=C:\Program Files\Firebird\Bin\fbclient.dll;
+                               password=masterkey; user=SYSDBA; M;',
+                             null);
+
+  ibec_Progress('Restoring the database...');
+  res = ibec_RestoreDatabase('D:\NEWBLOCKDEMO.FBK',
+                             'localhost:D:\NEWBLOCKDEMO.FB2',
+                             'ClientLib=C:\Program Files\Firebird\Bin\fbclient.dll;
+                                 password=masterkey; user=SYSDBA; OneAtATime; PageSize=8192; C',
+                              null);
+
+  -- Creating three named connections to our databases...
+
+  SourceDBParams = 'DBName=localhost:D:\FB2_DATA\IBEHELP.FBA; User=SYSDBA; SQLDialect=3; Names=WIN1251;
+                    password=masterkey; ClientLib=C:\Program Files\Firebird\bin\fbclient.dll';
+
+  TargetDBParams = 'DBName=localhost:D:\NEWBLOCKDEMO.FB2; User=SYSDBA; SQLDialect=3;  Names=WIN1251;
+                    password=masterkey; ClientLib=C:\Program Files\Firebird\bin\fbclient.dll';
+
+
+  OldDB =    ibec_CreateConnection(__ctFirebird, SourceDBParams);
+  NewDB =    ibec_CreateConnection(__ctFirebird, TargetDBParams);
+  TempConn = ibec_CreateConnection(__ctFirebird, TargetDBParams);
+
+
+  WriteLogMessage = 'execute ibeblock (
+                        Conn variant,
+                        MessageID integer,
+                        LogMessage variant)
+                     as
+                     begin
+                       ibec_UseConnection(Conn);
+                       insert into IBE$$TEMP_LOG (ID, LOG_MESSAGE) values (:MessageID, :LogMessage);
+                       commit;
+                     end';
+
+
+
+  ibec_UseConnection(NewDB);
+  if (exists(select rdb$relation_name from rdb$relations where rdb$relation_name = 'IBE$$TEMP_LOG')) then
+  begin
+    execute statement 'DROP TABLE IBE$$TEMP_LOG';
+    commit;
+  end
+
+  try
+    TempTBLStmt = 'CREATE TABLE IBE$$TEMP_DATA (
+                       OPER_ID integer,
+                       OBJECT_NAME varchar(100),
+                       OBJECT_TYPE varchar(20),
+                       OBJECT_STMT varchar(1000))';
+    execute statement :TempTBLStmt;
+    commit;
+  except
+    raise;
+  end;
+
+  try
+    TempTBLStmt = 'CREATE TABLE IBE$$TEMP_LOG (
+                       ID integer,
+                       LOG_MESSAGE blob sub_type 1)';
+    execute statement :TempTBLStmt;
+    commit;
+  except
+    raise;
+  end;
+
+
+
+
+  iCounter = 0;
+
+
+  -- Before transferring data we must deactivate all triggers,
+  -- foreign/primary keys, unique and check constraints
+
+-------------------------------------------------------------------------------
+-- DEACTIVATING TRIGGERS ------------------------------------------------------
+-------------------------------------------------------------------------------
+
+  ibec_Progress('Deactivating triggers...');
+  for select T.RDB$TRIGGER_NAME
+      from RDB$TRIGGERS T
+      left join RDB$CHECK_CONSTRAINTS C on C.RDB$TRIGGER_NAME = T.RDB$TRIGGER_NAME
+      where ((T.RDB$TRIGGER_INACTIVE = 0) or (T.RDB$TRIGGER_INACTIVE is null)) and
+            ((T.RDB$SYSTEM_FLAG = 0) or (T.RDB$SYSTEM_FLAG is null)) and
+            (c.rdb$trigger_name is null)
+      order by T.RDB$TRIGGER_NAME
+      into :TrgData
+  do
+  begin
+    TrgName = ibec_Trim(TrgData[0]);
+    StmtDo = 'ALTER TRIGGER ' || ibec_FormatIdent(TrgName);
+    StmtUndo = StmtDo || ' ACTIVE';
+    StmtDo = StmtDo || ' INACTIVE';
+    iCounter = iCounter + 1;
+
+    try
+      ibec_UseConnection(NewDB);
+      insert into IBE$$TEMP_DATA (OPER_ID, OBJECT_NAME, OBJECT_TYPE, OBJECT_STMT)
+                          values (:iCounter, :TrgName, 'TRIGGER', :StmtUndo);
+      try
+        ibec_UseConnection(TempConn);
+        execute statement StmtDo;
+        commit;
+      except
+        ErrCount = ErrCount + 1;
+        execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message());
+      end;
+    except
+      ErrCount = ErrCount + 1;
+      execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message());
+    end;
+
+    ibec_UseConnection(NewDB);
+  end
+  commit;
+
+
+
+-------------------------------------------------------------------------------
+-- DROPPING PRIMARY/FOREIGN KEYS, UNIQUE CONSTRAINTS --------------------------
+-------------------------------------------------------------------------------
+
+  -- Dropping foreign keys, primary keys and unique constraints
+  ibec_Progress('Dropping foreign keys, primary keys and unique constraints...');
+  for select rc.rdb$constraint_name,
+             rc.rdb$relation_name,
+             rc.rdb$constraint_type,
+             rc.rdb$index_name
+      from rdb$relation_constraints rc
+      where (rc.rdb$constraint_type in ('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE'))
+      order by rc.rdb$constraint_type, rc.rdb$relation_name
+      into :CData
+  do
+  begin
+    CName = ibec_Trim(CData[0]);
+    CTable = ibec_Trim(CData[1]);
+    CType = ibec_Trim(CData[2]);
+    CIdxFields = '';
+    CIdxName = ibec_Trim(CData[3]);
+    for select rdb$field_name
+        from rdb$index_segments
+        where rdb$index_name = :CIdxName
+        order by rdb$field_position
+        into :FldName
+    do
+    begin
+      FldName = ibec_Trim(FldName);
+      if (CIdxFields <> '') then
+        CIdxFields = CIdxFields || ', ';
+      CIdxFields = CIdxFields || ibec_FormatIdent(FldName);
+    end
+
+    StmtDo = 'ALTER TABLE ' || ibec_FormatIdent(CTable);
+    StmtUndo = StmtDo || ' ADD ';
+    if ((ibec_Copy(CName, 1, 6) <> 'INTEG_') and (ibec_Copy(CName, 1, 4) <> 'RDB$')) then
+      StmtUndo = StmtUndo || 'CONSTRAINT ' || ibec_FormatIdent(CName);
+    StmtUndo = StmtUndo || ' ' || CType || ' (' || CIdxFields || ')';
+    StmtDo = StmtDo || ' DROP CONSTRAINT ' || ibec_FormatIdent(CName);
+
+    if (CType = 'FOREIGN KEY') then
+    begin
+      StmtUndo = StmtUndo || ' REFERENCES ';
+
+      select rdb$const_name_uq, rdb$update_rule, rdb$delete_rule
+          from rdb$ref_constraints
+          where rdb$constraint_name = :CName
+          into :RefData;
+      CName2 = ibec_Trim(RefData[0]);
+      UpdateRule = ibec_Trim(RefData[1]);
+      DeleteRule = ibec_Trim(RefData[2]);
+
+      select rdb$relation_name, rdb$index_name
+          from rdb$relation_constraints
+          where rdb$constraint_name = :CName2
+          into :RefTable, :RefIndex;
+      RefTable = ibec_Trim(RefTable);
+      RefIndex = ibec_Trim(RefIndex);
+      RefFields = '';
+
+      for select rdb$field_name
+          from rdb$index_segments
+          where rdb$index_name = :RefIndex
+          order by rdb$field_position
+          into :FldName
+      do
+      begin
+        FldName = ibec_Trim(FldName);
+        if (RefFields <> '') then
+          RefFields = RefFields || ', ';
+        RefFields = RefFields || ibec_FormatIdent(FldName);
+      end
+      StmtUndo = StmtUndo || ibec_FormatIdent(RefTable) || '(' || RefFields || ')';
+      if (UpdateRule <> 'RESTRICT') then
+        StmtUndo = StmtUndo || ' ON UPDATE ' || UpdateRule;
+      if (DeleteRule <> 'RESTRICT') then
+        StmtUndo = StmtUndo || ' ON DELETE ' || DeleteRule;
+    end
+
+    iCounter = iCounter + 1;
+    try
+      ibec_UseConnection(NewDB);
+      insert into IBE$$TEMP_DATA (OPER_ID, OBJECT_NAME, OBJECT_TYPE, OBJECT_STMT)
+                          values (:iCounter, :CName, 'CONSTRAINT', :StmtUndo);
+      try
+        ibec_UseConnection(TempConn);
+        execute statement StmtDo;
+        commit;
+      except
+        ErrCount = ErrCount + 1;
+        execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message());
+      end;
+    except
+      ErrCount = ErrCount + 1;
+      execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message());
+    end;
+
+    ibec_UseConnection(NewDB);
+  end
+  commit;
+
+
+-------------------------------------------------------------------------------
+-- DROPPING CHECK CONSTRAINTS -------------------------------------------------
+-------------------------------------------------------------------------------
+
+  ibec_UseConnection(NewDB);
+  ibec_progress('Dropping check constraints...');
+
+  for select A.RDB$CONSTRAINT_NAME,
+             A.RDB$RELATION_NAME,
+             C.RDB$TRIGGER_SOURCE
+      from RDB$RELATION_CONSTRAINTS A, RDB$CHECK_CONSTRAINTS B, RDB$TRIGGERS C
+      where (A.RDB$CONSTRAINT_TYPE = 'CHECK') and
+            (A.RDB$CONSTRAINT_NAME = B.RDB$CONSTRAINT_NAME) and
+            (B.RDB$TRIGGER_NAME = C.RDB$TRIGGER_NAME) and
+            (C.RDB$TRIGGER_TYPE = 1)
+      into :CData
+  do
+  begin
+    CName = ibec_Trim(CData[0]);
+    TableName = ibec_Trim(CData[1]);
+    CheckSource = ibec_Trim(CData[2]);
+    StmtDo = 'ALTER TABLE ' || ibec_FormatIdent(TableName);
+    StmtUndo = StmtDo || ' ADD ';
+    if (ibec_Copy(CName, 1, 6) <> 'INTEG_') then
+      StmtUndo = StmtUndo || 'CONSTRAINT ' || ibec_FormatIdent(CName);
+    StmtUndo = StmtUndo || ' ' || CheckSource;
+    StmtDo = StmtDo || ' DROP CONSTRAINT ' || ibec_FormatIdent(CName);
+
+    iCounter = iCounter + 1;
+
+    try
+      ibec_UseConnection(NewDB);
+      insert into IBE$$TEMP_DATA (OPER_ID, OBJECT_NAME, OBJECT_TYPE, OBJECT_STMT)
+                          values (:iCounter, :CName, 'CHECK', :StmtUndo);
+      try
+        ibec_UseConnection(TempConn);
+        execute statement StmtDo;
+        commit;
+      except
+      end;
+    except
+    end;
+
+    ibec_UseConnection(NewDB);
+  end
+
+-------------------------------------------------------------------------------
+-- DEACTIVATING INDICES -------------------------------------------------------
+-------------------------------------------------------------------------------
+
+  ibec_Progress('Deactivating indices...');
+  for select rdb$index_name
+      from rdb$indices
+      where ((rdb$index_inactive = 0) or (rdb$index_inactive is null)) and
+            ((rdb$system_flag = 0) or (rdb$system_flag is null))
+      order by rdb$index_name
+      into :IdxName
+  do
+  begin
+    IdxName = ibec_Trim(IdxName);
+    StmtDo = 'ALTER INDEX ' || ibec_FormatIdent(IdxName);
+    StmtUndo = StmtDo || ' ACTIVE';
+    StmtDo = StmtDo || ' INACTIVE';
+    iCounter = iCounter + 1;
+
+    try
+      ibec_UseConnection(NewDB);
+      insert into IBE$$TEMP_DATA (OPER_ID, OBJECT_NAME, OBJECT_TYPE, OBJECT_STMT)
+                          values (:iCounter, :IdxName, 'INDEX', :StmtUndo);
+      try
+        ibec_UseConnection(TempConn);
+        execute statement StmtDo;
+        commit;
+      except
+        ErrCount = ErrCount + 1;
+        execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message());
+      end;
+    except
+      ErrCount = ErrCount + 1;
+      execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message());
+    end;
+
+    ibec_UseConnection(NewDB);
+  end
+  commit;
+
+
+
+-------------------------------------------------------------------------------
+-- TRANSFERRING DATA ----------------------------------------------------------
+-------------------------------------------------------------------------------
+
+  ibec_UseConnection(NewDB);
+  ibec_progress('Transferring data...');
+
+  for select rdb$relation_name
+      from rdb$relations
+      where (rdb$view_source is null) and
+            ((rdb$system_flag = 0) or (rdb$system_flag is null)) and
+            (not rdb$relation_name starting with 'IBE$$')
+            --(rdb$relation_name = 'TEST_GEN')
+      order by rdb$relation_name
+      into :TableName
+  do
+  begin
+    RecCount = 0;
+    TableName = ibec_Trim(TableName);
+    ibec_Progress('Transferring data from ' || TableName || '...');
+    SelStmt = '';
+    InsStmt = '';
+    InsValues = '';
+    for select rf.rdb$field_name
+        from rdb$relation_fields rf, rdb$fields f
+        where (rf.rdb$relation_name = :TableName) and
+              (f.rdb$field_name = rf.rdb$field_source) and
+              (f.rdb$computed_blr is null)
+        order by rf.rdb$field_position
+        into :FldName
+    do
+    begin
+      FldName = ibec_trim(FldName);
+      if (SelStmt <> '') then
+        SelStmt = SelStmt || ', ';
+      SelStmt = SelStmt || ibec_FormatIdent(FldName);
+      if (InsValues <> '') then
+        InsValues = InsValues || ', ';
+      InsValues = InsValues || ':' || ibec_FormatIdent(FldName);
+    end
+    InsStmt = 'INSERT INTO ' || ibec_FormatIdent(TableName) || ' (' || SelStmt || ') VALUES (' || InsValues || ')';
+    SelStmt = 'SELECT ' || SelStmt || ' FROM ' || ibec_FormatIdent(TableName);
+
+    try
+      ibec_UseConnection(TempConn);
+      execute statement 'DELETE FROM ' || ibec_FormatIdent(TableName);
+      commit;
+    except
+    end;
+
+    ibec_UseConnection(OldDB);
+    try
+      for execute statement :SelStmt
+          into :Data
+      do
+      begin
+        ibec_UseConnection(TempConn);
+        try
+          execute statement InsStmt values :Data;
+        except
+          ErrCount = ErrCount + 1;
+          execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message() || ibec_CRLF() || InsStmt);
+        end;
+        RecCount = RecCount + 1;
+  
+        -- Commit after each 1000 records
+        if (ibec_Mod(RecCount, 1000) = 0) then
+        begin
+          ibec_Progress('    ' || RecCount);
+          commit;
+        end;
+  
+      end
+    except
+      ErrCount = ErrCount + 1;
+      execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message() || ibec_CRLF() || SelStmt);
+    end;
+    commit;
+
+    ibec_Progress('    ' || RecCount || ' records inserted into ' || TableName);
+
+    ibec_UseConnection(NewDB);
+  end
+
+
+-------------------------------------------------------------------------------
+-- RESTORING ACTIVITY OF TRIGGERS, FK/PK, UNIQUE CONSTRAINTS, CHECKS ----------
+-------------------------------------------------------------------------------
+
+  ibec_UseConnection(NewDB);
+  ibec_progress('Restoring triggers, primary and foreign keys, checks...');
+  for select OBJECT_STMT
+      from IBE$$TEMP_DATA
+      order by OPER_ID desc
+      into :Stmt
+  do
+  begin
+    ibec_UseConnection(TempConn);
+    try
+      execute statement :Stmt;
+      commit;
+    except
+      ErrCount = ErrCount + 1;
+      execute ibeblock WriteLogMessage(TempConn, ErrCount, ibec_err_Message() || ibec_CRLF ||
+                                       ibec_CRLF() || :Stmt);
+    end;
+    ibec_UseConnection(NewDB);
+  end
+  commit;
+
+  ibec_UseConnection(NewDB);
+  try
+    execute statement 'DROP TABLE IBE$$TEMP_DATA';
+  except
+  end;
+  if (ErrCount = 0) then
+  begin
+    try
+      execute statement 'DROP TABLE IBE$$TEMP_LOG';
+    except
+    end;
+  end;
+  commit;
+
+  ibec_CloseConnection(OldDB);
+  ibec_CloseConnection(NewDB);
+  ibec_CloseConnection(TempConn);
+
+  Time2 = ibec_GetTickCount();
+
+  TotalTime = ibec_Div((Time2 - Time1), 1000);
+
+  if (ErrCount = 0) then
+    ibec_ShowMessage('Block executed successfully!' || ibec_CRLF() || 'Total time: ' || TotalTime);
+  else
+    ibec_ShowMessage('There were errors. See IBE$$TEMP_LOG table for more details.' ||
+                      ibec_CRLF() || 'Total time: ' || TotalTime);
+end

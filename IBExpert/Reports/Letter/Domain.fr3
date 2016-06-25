@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TfrxReport Name="" Version="3.17" DotMatrixReport="False" IniFile="\Software\Fast Reports" PreviewOptions.Buttons="2047" PreviewOptions.Zoom="1" PrintOptions.Printer="Default" ReportOptions.CreateDate="38601,7565822106" ReportOptions.Description.Text="" ReportOptions.LastChange="39005,5187145139" ScriptLanguage="PascalScript" ScriptText.Text="begin&#13;&#10;&#13;&#10;end." PropData="044C656674031B0103546F70027A08446174617365747301010C1A00000020446174615365744E616D653D2266727864446F6D61696E73220000095661726961626C65730100055374796C650100">
+  <TfrxReportPage Name="Page1" PaperWidth="215,9" PaperHeight="279,4" PaperSize="1" LeftMargin="3" RightMargin="3" TopMargin="3" BottomMargin="3" Columns="1" ColumnWidth="0" ColumnPositions.Text="0" HGuides.Text="" VGuides.Text="">
+    <TfrxReportTitle Name="ReportTitle1" Height="45,11812" Left="0" Top="18,89765" Width="793,323347">
+      <TfrxMemoView Name="Memo30" Left="26" Top="6,54329" Width="96" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="0" ParentFont="False" Text="Date / Time:"/>
+      <TfrxMemoView Name="Memo31" Left="26" Top="21,54329" Width="96" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="0" ParentFont="False" Text="Database:"/>
+      <TfrxMemoView Name="Memo32" Left="352" Top="6,54329" Width="96" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="0" ParentFont="False" Text="User:"/>
+      <TfrxMemoView Name="Memo33" Left="131" Top="6,54329" Width="200" Height="14" StretchMode="smMaxHeight" DisplayFormat.FormatStr="dd mmmm yyyy" DisplayFormat.Kind="fkDateTime" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="1" ParentFont="False" Text="[_DateTime]"/>
+      <TfrxMemoView Name="Memo34" Left="131" Top="21,54329" Width="200" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="1" ParentFont="False" Text="[_Database]"/>
+      <TfrxMemoView Name="Memo35" Left="457" Top="6,54329" Width="200" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="1" ParentFont="False" Text="[_UserName]"/>
+      <TfrxMemoView Name="Memo36" Left="352" Top="21,54329" Width="96" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="0" ParentFont="False" Text="Domain:"/>
+      <TfrxMemoView Name="Memo37" Left="457" Top="21,54329" Width="200" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Arial" Font.Style="1" ParentFont="False" Text="[_ObjectName]"/>
+      <TfrxLineView Name="Line1" Left="25" Top="40,54329" Width="677" Height="0" Frame.Typ="4" Frame.Width="2"/>
+    </TfrxReportTitle>
+    <TfrxPageHeader Name="PageHeader1" Height="53" Left="0" Top="86,92919" Width="793,323347">
+      <TfrxMemoView Name="Memo1" Left="26" Top="28,18893" Width="72" Height="24" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-19" Font.Name="Arial" Font.Style="0" ParentFont="False" Text="Domain:"/>
+      <TfrxMemoView Name="Memo38" Left="98" Top="28,18893" Width="603" Height="24" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-19" Font.Name="Arial" Font.Style="1" ParentFont="False" Text="[_ObjectName]"/>
+      <TfrxMemoView Name="Memo58" Left="29" Top="2,37786" Width="677" Height="19" StretchMode="smMaxHeight" Color="8421376" Font.Charset="1" Font.Color="16777215" Font.Height="-16" Font.Name="Arial" Font.Style="1" Frame.Typ="15" ParentFont="False" VAlign="vaCenter" Text="SQL"/>
+    </TfrxPageHeader>
+    <TfrxPageFooter Name="PageFooter1" Height="40" Left="0" Top="411,96877" Width="793,323347"/>
+    <TfrxHeader Name="DescriptionHeader" Height="19" Left="0" Top="287,24428" Width="793,323347">
+      <TfrxMemoView Name="Memo57" Left="21,44094" Top="0,88961" Width="677" Height="19" StretchMode="smMaxHeight" Color="8421376" Font.Charset="1" Font.Color="16777215" Font.Height="-16" Font.Name="Arial" Font.Style="1" Frame.Typ="15" ParentFont="False" VAlign="vaCenter" Text="Description"/>
+    </TfrxHeader>
+    <TfrxMasterData Name="DescriptionData" Height="21,77953" Left="0" Top="328,81911" Width="793,323347" Columns="1" ColumnWidth="200" ColumnGap="20" RowCount="0" Stretched="True">
+      <TfrxMemoView Name="Memo59" Left="21,44094" Top="1,53525" Width="677" Height="18" StretchMode="smMaxHeight" Frame.Typ="15" Text="[_Description]"/>
+    </TfrxMasterData>
+    <TfrxHeader Name="DDLHeader" Height="19" Left="0" Top="200,31509" Width="793,323347">
+      <TfrxRichView Name="_DDL" Left="29" Top="4,80303" Width="677" Height="24" StretchMode="smMaxHeight" GapX="2" GapY="1" PropData="0852696368456469740A990000007B5C727466315C616E73695C616E7369637067313235315C64656666305C6465666C616E67313034397B5C666F6E7474626C7B5C66305C666E696C204D532053616E732053657269663B7D7D0D0A7B5C636F6C6F7274626C203B5C726564305C677265656E305C626C7565303B7D0D0A5C766965776B696E64345C7563315C706172645C6366315C66305C667331365C7061720D0A7D0D0A00"/>
+    </TfrxHeader>
+    <TfrxMasterData Name="DDLData" Height="24" Left="0" Top="241,88992" Width="793,323347" AllowSplit="True" Columns="1" ColumnWidth="200" ColumnGap="20" DataSetName="frxdDomains" RowCount="0" Stretched="True"/>
+    <TfrxMemoView Name="Memo39" Left="610" Top="1024" Width="96" Height="18" StretchMode="smMaxHeight" Text="Page [PAGE#] "/>
+    <TfrxLineView Name="Line2" Left="29" Top="1016" Width="677" Height="0" Frame.Typ="4" Frame.Width="2"/>
+  </TfrxReportPage>
+</TfrxReport>

@@ -1,0 +1,211 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'Generator name to be copied',
+  DestObjectName variant = '' comment 'Destination generator name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyGeneratorDescription boolean = TRUE comment 'Copy description if possible',
+  SetGeneratorValue boolean = TRUE comment 'Set generator value',
+  IfGeneratorExists enum ('Do nothing, exit',
+                          'Drop and recreate generator') = 0 comment 'If generator exists in the target database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'AVX-MAIN:D:\FB2_DATA\IBEHELP.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    DestDBConnStr = 'AVX-MAIN:D:\FB2_DATA\FORMTEST.FDB';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    SrcObjectName = 'GEN_ATF_URLS_ID';
+    DestObjectName = 'GEN_ATF_URLS_ID';
+  end;
+
+  SrcGenName = SrcObjectName;
+  DestGenName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    bSrcPackages = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+
+    SelStmt = 'select rdb$generator_name, rdb$description';
+    if (bSrcPackages) then
+      SelStmt = SelStmt + ', rdb$initial_value, rdb$generator_increment';
+    SelStmt = SelStmt + CRLF + 'from rdb$generators' + CRLF +
+                               'where rdb$generator_name = ' + ibec_QuotedStr(:SrcGenName, '''');
+
+    execute statement SelStmt into :SrcGenData;
+
+    if (SrcGenData['RDB$GENERATOR_NAME'] is null) then
+      exception cant_find_generator 'There is no such generator (' + :SrcGenName + ') in the source database.';
+
+    if ((DestGenName is null) or (DestGenName = ''))  then
+      DestGenName = SrcGenName;
+
+    DestGenNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestGenName, '"'), ibec_AnsiUpperCase(:DestGenName));
+    SrcGenNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcGenName, '"'), ibec_AnsiUpperCase(:SrcGenName));
+
+    ibec_UseConnection(DestDB);
+
+    bDestPackages = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+
+    if (exists(select rdb$generator_name from rdb$generators where rdb$generator_name = :DestGenName)) then
+    begin
+      if (IfGeneratorExists = 0) then
+      begin
+        ibec_Progress('Generator "' + DestGenName + '" exists in the destination database already.');
+        Exit;
+      end;
+      else if (IfGeneratorExists = 1) then
+      begin
+        sDrop = 'DROP GENERATOR ' + DestGenNameFmt;
+        try
+          ibec_Progress('Dropping generator ' + DestGenNameFmt + '...');
+          execute statement sDrop;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+    end
+
+    CreateGeneratorStmt = 'CREATE GENERATOR ' + DestGenNameFmt;
+    if (bDestPackages) then
+    begin
+      CreateGeneratorStmt = 'CREATE SEQUENCE ' + DestGenNameFmt;
+      if (SrcGenData['RDB$INITIAL_VALUE'] is not null) then
+        CreateGeneratorStmt .= ' START WITH ' + ibec_Cast(SrcGenData['RDB$INITIAL_VALUE'], __typeString);
+      if (SrcGenData['RDB$GENERATOR_INCREMENT'] is not null) then
+        CreateGeneratorStmt .= ' INCREMENT BY ' + ibec_Cast(SrcGenData['RDB$GENERATOR_INCREMENT'], __typeString);
+    end;
+
+    try
+      ibec_Progress('Creating generator ' + DestGenNameFmt + '...');
+      execute statement :CreateGeneratorStmt;
+      commit;
+      ibec_Progress(Success);
+    except
+      ibec_Progress(Failed);
+      rollback;
+      raise;
+    end;
+    
+    if (SetGeneratorValue) then
+    begin
+      ibec_UseConnection(SrcDB);
+      sSelect = 'SELECT GEN_ID(' + SrcGenNameFmt + ', 0) FROM RDB$DATABASE';
+      execute statement sSelect into :GenValue;
+      ibec_UseConnection(DestDB);
+      if (bDestPackages) then
+        sSetValue = 'ALTER SEQUENCE ' + DestGenNameFmt + ' RESTART WITH ' + ibec_Cast(GenValue, __typeString);
+      else
+        sSetValue = 'SET GENERATOR ' + DestGenNameFmt + ' TO ' + ibec_Cast(GenValue, __typeString);
+      try
+        ibec_Progress('Setting generator value...');
+        execute statement :sSetValue;
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+      end;
+    end
+    
+    if (CopyGeneratorDescription and (SrcGenData['RDB$DESCRIPTION'] is not null)) then
+    begin
+      sDesc = SrcGenData['RDB$DESCRIPTION'];
+      GenName = ibec_IIF(DestDBSQLDialect = 3, :DestGenName, ibec_AnsiUpperCase(:DestGenName));
+      try
+        ibec_Progress('Setting generator description...');
+        sCommentOnSequence = ibec_Format('COMMENT ON SEQUENCE %s IS %s', DestGenNameFmt, ibec_QuotedStr(sDesc, ''''));
+        if (bDestPackages) then
+          execute STATEMENT :sCommentOnSequence;
+        else
+          update rdb$generators set rdb$description = :sDesc
+                 where (rdb$generator_name = :GenName);
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+      end;
+    end;
+    
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

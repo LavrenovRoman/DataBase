@@ -1,0 +1,20 @@
+execute ibeblock
+returns (htmlpage blob)
+as
+begin
+  htmlpage = '<SCRIPT> function ShowDDL(){location.href = "TableChanged" 
+this.focus()}</SCRIPT>';
+  htmlpage = htmlpage || '<P>Select a table from the list below to get its DLL:</P>
+              <SELECT ID="TableSelect" OnChange="ShowDDL()">';
+  for select rdb$relation_name, rdb$relation_id from rdb$relations
+      order by rdb$relation_name
+      into :rel_name, :rel_id
+  do
+  begin
+    rel_name = ibec_Trim(rel_name);
+    htmlpage = htmlpage || ibec_chr(13) || ibec_chr(10) || '    <option value="' || :rel_id || '">' || rel_name || '</OPTION>';
+  end
+  htmlpage = htmlpage || ibec_chr(13) || ibec_chr(10) || '</SELECT>';
+  htmlpage = htmlpage || '<P></P><P ID="FAKE">';
+
+end

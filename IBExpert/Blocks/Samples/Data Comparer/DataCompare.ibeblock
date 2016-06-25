@@ -1,0 +1,402 @@
+execute ibeblock
+returns (info varchar(100))
+as
+begin
+  RecNum = 5000;  -- How many records will be inserted into our test table
+  StartTime = ibec_gettickcount();  -- Note the time...
+
+  -- If databases do exist already we will not try to create them.
+  -- Of course, this way doesn't fit for remote databases
+  if (not ibec_fileexists('c:\db1.fdb')) then
+    create database 'localhost:c:\db1.fdb' user 'SYSDBA' password 'masterkey'
+    page_size 4096 sql_dialect 3
+    -- CLIENTLIB isn't mandatory if you're using standard gds32.dll
+    clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+  if (not ibec_fileexists('c:\db2.fdb')) then
+    create database 'localhost:c:\db2.fdb' user 'SYSDBA' password 'masterkey'
+    page_size 4096 sql_dialect 3
+    clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+
+  -- Creating two named connections to our databases...
+  create connection db1 dbname 'localhost:c:\db1.fdb'
+  password 'masterkey' user 'SYSDBA'
+  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+  create connection db2 dbname 'localhost:c:\db2.fdb'
+  password 'masterkey' user 'SYSDBA'
+  sql_dialect 3
+  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+  -- We're going to create the IBE$$TEST_DATA table in each database
+  -- and populate it with some data
+  CreateStmt =
+    'create table IBE$$TEST_DATA (
+       ID integer not null,
+       ID2 varchar(20) not null,
+       F_INTEGER integer,
+       F_VARCHAR varchar(100),
+       F_DATE date,
+       F_TIME time,
+       F_TIMESTAMP timestamp, 
+       F_NUMERIC numeric(15,2),
+       F_BOOL char(1) check (F_BOOL in (''T'', ''F'')),
+       F_BLOB blob sub_type 1,
+       F_SEASON varchar(15) check(F_SEASON in (''Spring'', ''Summer'', ''Autumn'', ''Winter'')))';
+
+  -- IBE$$TEST_DATA will have a primary key consisting of two fields.
+  -- Just to show, how to do our job in case when a primary key consists
+  -- of more than one field
+  AlterStmt =
+    'alter table IBE$$TEST_DATA add constraint PK_IBE$$TEST_DATA primary key (ID, ID2)';
+
+  -- First we're working with DB1
+  use db1;
+  -- If IBE$$TEST_DATA doesn't exist in the database we must create it
+  if (not exists(select rdb$relation_name from rdb$relations where rdb$relation_name = 'IBE$$TEST_DATA')) then
+  begin
+    -- Creating the table itself...
+    execute statement :CreateStmt;
+    -- You must commit DDL-statements explicitly
+    commit;
+    -- ...and creating a primary key
+    execute statement :AlterStmt;
+    commit;
+  
+    -- So, we've just created the table. Now we should populate it with data
+    -- We will generate some random data for each field, only
+    -- for the first primary key field we will use autoincrement value
+    i = 0;
+    while (i < RecNum) do
+    begin
+      fid2    = ibec_randomstring(1,20,65,90);
+      fint    = ibec_random2(1, 100000);
+      fvarc   = ibec_randomstring(1,100,65,90);
+      fdate   = ibec_random2(20000,40000);
+      ftime   = ibec_random(0);
+      ftimest = ibec_random2(20000,40000) + ibec_random(0);
+      fnum    = ibec_random2(1,40000) + ibec_random(0);
+      fbool   = ibec_randomval('T','F');
+      fblob   = ibec_randomstring(500, 1000, 0, 255);
+      fseason = ibec_randomval('Spring', 'Summer', 'Autumn', 'Winter');
+  
+      insert into IBE$$TEST_DATA values (:i, :fid2, :fint, :fvarc, :fdate, :ftime, :ftimest, :fnum, :fbool, :fblob, :fseason);
+      i = i + 1;
+  
+      -- After each 500 inserted records we will display a progress message.
+      -- In SQL Editor it will be displayed on the progress panel above the
+      -- Code Editor
+      if (ibec_mod(i, 500) = 0) then
+      begin
+        ibec_progress(i || ' records inserted...');
+        -- Don't forget to commit
+        commit;
+      end
+    end
+    -- Once more COMMIT. Maybe there are some uncommited INSERTs...
+    commit;
+  end
+
+  -- Let's work with the second connection...
+  use db2;
+  -- If IBE$$TEST_DATA doesn't exist in the database we must create it
+  if (not exists(select rdb$relation_name from rdb$relations where rdb$relation_name = 'IBE$$TEST_DATA')) then
+  begin
+
+    execute statement :CreateStmt;
+    -- Don't forget to commit each DDL-statement explicitly!
+    commit;
+    execute statement :AlterStmt;
+    commit;
+  
+    -- Main idea is: we get the data from the first database and insert
+    -- it into IBE$$TEST_TABLE in the second database
+    use db1;
+  
+    i = 0;
+    k = 0;
+    -- FOR ... SELECT will select data from the first database...
+    for select * from IBE$$TEST_DATA
+    into vals
+    do
+    begin
+      -- ...and we will insert them into the second database
+      use db2;
+      k = k + 1;  -- Just a counter...
+      -- So, we should modify some data. In other case we'll have nothing to compare ;)
+      if (ibec_mod(k,100) <> 0) then  -- Each hundredth record will be skipped...
+      begin
+        if (ibec_mod(i,10) = 0) then  -- the 8th field of each tenth record will be changed to NULL...
+          vals[7] = null;
+        if (ibec_mod(i,30) = 0) then  -- ...and 10th field of each 30th record will be modified...
+          vals[9] = ibec_randomstring(500, 1000, 0, 255);
+        -- Finally insert a record
+        insert into db2.IBE$$TEST_DATA values :vals;
+        i = i + 1;
+
+        -- After each 500 inserted records we will display a progress message.
+        -- Also we commit each 500 INSERTs
+        if (ibec_mod(i, 500) = 0) then
+        begin
+          ibec_progress(i || ' records inserted...');
+          commit;
+        end
+      end
+    end
+  
+    -- Once again COMMIT...
+    use db2;
+    commit;
+
+
+    -- Now we will insert some more data into the second database
+    -- just to have more differences between tables...
+    i = k + 1;
+    while (i < (RecNum + 100)) do
+    begin
+      fid2    = ibec_randomstring(1,20,65,90);
+      fint    = ibec_random2(1, 100000);
+      fvarc   = ibec_randomstring(1,100,65,90);
+      fdate   = ibec_random2(20000,40000);
+      ftime   = ibec_random(0);
+      ftimest = ibec_random2(20000,40000) + ibec_random(0);
+      fnum    = ibec_random2(1,40000) + ibec_random(0);
+      fbool   = ibec_randomval('T','F');
+      fblob   = ibec_randomstring(500, 1000, 0, 255);
+      fseason = ibec_randomval('Spring', 'Summer', 'Autumn', 'Winter');
+  
+      insert into IBE$$TEST_DATA values (:i, :fid2, :fint, :fvarc, :fdate, :ftime, :ftimest, :fnum, :fbool, :fblob, :fseason);
+      i = i + 1;
+  
+      if (ibec_mod(i, 500) = 0) then
+      begin
+        ibec_progress(i || ' records inserted...');
+        commit;
+      end
+    end
+
+    info = i || ' records inserted into db2.IBE$$TEST_DATA';
+    suspend;
+  end
+
+
+
+  -- So, let's begin to compare data...
+  -- Our goal is make the second IBE$$TEST_DATA a full copy of
+  -- the first IBE$$TEST_DATA
+
+  -- First of all we should get a primary key of reference table
+  use db1;
+  i = 0;
+  for select i.rdb$field_name
+  from rdb$relation_constraints rc, rdb$index_segments i, rdb$indices idx
+  where (i.rdb$index_name = rc.rdb$index_name) and
+        (idx.rdb$index_name = rc.rdb$index_name) and
+        (rc.rdb$constraint_type = 'PRIMARY KEY') and
+        (rc.rdb$relation_name = 'IBE$$TEST_DATA')
+  order by i.rdb$field_position
+  into fldname
+  do
+  begin
+    PKFields[i] = fldname;
+    i = i + 1;
+  end
+
+  -- Now we need to get a list of remaining fields.
+  SelStmt = 'select rdb$field_name
+             from rdb$relation_fields
+             where (rdb$relation_name = ''IBE$$TEST_DATA'')';
+
+  -- Here we add a condition to exclude primary key fields from select result
+  i = 0;
+  HighDim = ibec_high(PKFields);
+  while (i <= HighDim) do
+  begin
+    SelStmt = SelStmt || ' and (rdb$field_name <> ''' || ibec_trim(PKFields[i]) || ''')';
+    i = i + 1;
+  end
+  -- We need natural order of fields...
+  SelStmt = SelStmt || ' order by rdb$field_position';
+
+  -- Finally execute just created select statement and get
+  -- an array of all non-pk fields
+  i = 0;
+  for execute statement :SelStmt
+  into :s
+  do
+  begin
+    -- Trim spaces, we need not them...
+    NonPKFields[i] = ibec_trim(:s);
+    i = i + 1;
+  end
+
+
+  -- Let's compose necessary statements:
+  -- SelStmt will be used to retrieve data
+  -- UpdStmt will be used to update the second table if two records differ
+  SelStmt = 'select ';
+  UpdStmt = 'update ibe$$test_data set ';
+  WhereClause = ' where ';
+  i = 0;
+  HighDim = ibec_high(NonPKFields);
+  while (i <= HighDim) do
+  begin
+    SelStmt = SelStmt || NonPKFields[i];
+    SelStmt = SelStmt || ', ';
+    UpdStmt = UpdStmt || ibec_chr(13) || NonPKFields[i] || ' = :' || NonPKFields[i];
+    if (i < HighDim) then
+      UpdStmt = UpdStmt || ', ';
+    i = i + 1;
+  end
+
+  -- Here we compose a WHERE clause with primary key fields:
+  -- WHERE (PK_FIELD1 = :PK_FIELD1) AND (PK_FIELD2 = :PK_FIELD2) AND ...
+  i = 0;
+  HighDim = ibec_high(PKFields);
+  while (i <= HighDim) do
+  begin
+    SelStmt = SelStmt || ibec_trim(PKFields[i]);
+    WhereClause = WhereClause || '(' || ibec_trim(PKFields[i]) || ' = :' || ibec_trim(PKFields[i]) || ')';
+    if (i < HighDim) then
+    begin
+      SelStmt = SelStmt || ', ';
+      WhereClause = WhereClause || ' and ';
+    end
+    i = i + 1;
+  end
+
+  SelStmt = SelStmt || ' from IBE$$TEST_DATA';
+
+  -- We are ready to begin the first pass...
+  -- During this pass we will insert records, that are missing in the
+  -- second table, and modify records, that do exist in the second
+  -- table but not equal to corresponding records in the first table
+  ibec_progress('First pass...');
+
+  k = 0;
+  -- FOR ... SELECT selects data from the first table
+  for execute statement :SelStmt
+  into :Record1
+  do
+  begin
+    -- Now we must use the second connection
+    use db2;
+    SelStmt2 = SelStmt || WhereClause;
+    -- In PKValues array we'll store values of primary key fields.
+    -- It is necessary to take into account that PK may consist of more
+    -- than one field, so we must copy PK values correctly.
+    l = 0;
+    while (l <= ibec_high(PKFields)) do
+    begin
+      PKValues[l] = Record1[ibec_high(Record1) - ibec_high(PKFields) + l];
+      l = l + 1;
+    end
+    -- Now we try to select a record from the second database
+    -- with specified primary key value.
+    -- We'll get an array of values if the record with specified
+    -- PK value exists in the second table, and array of NULLs if
+    -- there is no such record.
+    execute statement :SelStmt2 into :Record2 values :PKValues;
+
+    -- If the last Record2 value is NULL - record is missing in
+    -- the second table and we must insert it
+    if (Record2[ibec_high(Record2)] is NULL) then
+    begin
+      -- Before inserting of a new record we should rearrange
+      -- our values array so as primary key values were
+      -- first in the array. In this case we will be able to
+      -- use natural order of fields.
+      ibec_shiftrecord(Record1, HighDim + 1);
+      -- Finally insert data using values of Record1
+      insert into ibe$$test_data values :Record1;
+
+      info = 'Record inserted. ' || PKValues[0];
+      suspend;
+    end;
+    else
+    begin
+      -- The record already exist in the second database and we
+      -- must compare two records, reference and comparative.
+      -- Following statement compares two arrays and returns 0
+      -- if both arrays are equal (have same dimensions and
+      -- same values of each array item)
+      iRes = ibec_cmprecords(Record1,Record2);
+      if (iRes <> 0) then  -- Records differ...
+      begin
+        -- Updating the record in the comparative table using
+        -- values of Record1
+        execute statement :UpdStmt || WhereClause values :Record1;
+
+        info = 'Record updated. ' || PKValues[0];
+        suspend;
+      end
+    end;
+
+    k = k + 1;
+    if (ibec_mod(k,100) = 0) then
+      ibec_progress(k || ' records compared...');
+  end
+
+  -- Don't forget to commit all modifications
+  use db2;
+  commit;
+
+  -- Let's prepare for the second pass...
+  -- During this pass we must determine records that must be deleted.
+  -- We need only chech whether a record with specified primary key
+  -- does exist in the first database, so our SELECT will consist of
+  -- primary key fields only. This will greatly increase the performance...
+  SelStmt = '';
+  i = 0;
+  HighDim = ibec_high(PKFields);
+  while (i <= HighDim) do
+  begin
+    SelStmt = SelStmt || ibec_trim(PKFields[i]);
+    if (i < HighDim) then
+      SelStmt = SelStmt || ', ';
+    i = i + 1;
+  end
+  SelStmt = 'select ' || SelStmt || ' from ibe$$test_data';
+
+  -- SELECT is ready, let's begin the second pass...
+  k = 0;
+  ibec_progress('Second pass...');
+  -- For each record in the comparative table we will search for
+  -- corresponding record in the reference table
+  for execute statement :SelStmt
+  into :Record1
+  do
+  begin
+    -- Now we should use the first connection
+    use db1;
+    SelStmt2 = SelStmt || WhereClause;
+    execute statement :SelStmt2 into :Record2 values :Record1;
+    if (Record2[0] is NULL) then
+    begin
+      -- There is no corresponding record in reference table
+      -- so we should delete it from comparative table
+      use db2;
+      execute statement 'delete from ibe$$test_data ' || WhereClause values :Record1;
+      info = 'Record deleted. ' || Record1[0];
+      suspend;
+    end
+    k = k + 1;
+
+    if (ibec_mod(k,100) = 0) then
+      ibec_progress(k || ' records compared...');
+  end
+
+  -- ...and don't forget to commit DELETEs
+  use db2;
+  commit;
+
+  -- Done. Close both connections
+  close connection db1;
+  close connection db2;
+
+  -- Let's count elapsed time...
+  EndTime = ibec_gettickcount();
+  info = 'Total time: ' || ((EndTime - StartTime) / 1000) || ' seconds';
+  suspend;
+end

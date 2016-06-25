@@ -1,0 +1,10 @@
+-- Below is a template/example of Before Metadata Change block
+execute ibeblock (
+  DatabaseID integer comment 'Internal ID (within IBExpert) of the active database',
+  StatementList variant comment 'Array of statements to be executed',
+  Sender integer comment 'Sender: 0 - object editors; 1 - SQL Editor; 2 - Script Executive'
+)
+as
+begin
+  exit;
+end

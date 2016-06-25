@@ -1,0 +1,114 @@
+-- !!! DO NOT CHANGE INPUT/OUTPUT PARAMETER NAMES !!!
+execute ibeblock (
+  IndexName variant,
+  TableName variant,
+  Depth variant,
+  LeafBuckets variant,
+  Nodes variant,
+  AvgDataLength variant,
+  TotalDup variant,
+  MaxDup variant,
+  FD_0_19 variant,
+  FD_20_39 variant,
+  FD_40_59 variant,
+  FD_60_79 variant,
+  FD_80_99 variant,
+  IsActive variant,
+  IsUnique variant,
+  Selectivity variant,
+  DBPageSize variant)
+returns (
+  IndexIsBad           variant = FALSE,
+  IndexIsUseless       variant = FALSE,
+  IndexIsTooDeep       variant = FALSE,
+  IndexNameProps       variant,
+  TableNameProps       variant,
+  DepthProps           variant,
+  LeafBucketsProps     variant,
+  NodesProps           variant,
+  AvgDataLengthProps   variant,
+  TotalDupProps        variant,
+  MaxDupProps          variant,
+  FD_0_19_Props        variant,
+  FD_20_39_Props       variant,
+  FD_40_59_Props       variant,
+  FD_60_79_Props       variant,
+  FD_80_99_Props       variant,
+  SelectivityProps     variant,
+  RealSelectivityProps variant,
+  RowProps    variant)
+as
+begin
+  CellColor  = 0;
+  FontColor  = 1;
+  FontBold   = 2;
+  FontItalic = 3;
+  CellHint   = 4;
+  CRLF = ibec_CRLF();
+
+  -- Calculating real selectivity of index.
+  -- This may differ from the selectivity stored in RDB$INDICES.RDB$STATISTICS
+  Uniques = Nodes - TotalDup;
+  RealSelectivity = 1;
+  if (Uniques > 0) then
+    RealSelectivity = 1/(Nodes - TotalDup);
+  IndexIsUseless = (Nodes > 0) and (TotalDup <> 0) and (RealSelectivity > 0.01);
+  if (IndexIsUseless) then
+  begin
+    RealSelectivityProps[CellColor] = 8553215;
+     RealSelectivityProps[CellHint] = 'Index ' + IndexName + ' is useless.' + CRLF + 'Its selectivity is greater than 0.01';
+  end;
+
+
+  -- Index is too deep when Index Depth is greater than 3
+  IndexIsTooDeep = Depth > 3;
+  if (IndexIsTooDeep) then
+  begin
+    DepthProps[CellColor] = 14399487;
+    DepthProps[FontColor] = 0;
+    DepthProps[CellHint] = 'Index ' + IndexName + ' is too deep.' + CRLF + 'Its depth is greater than 3';
+  end;
+
+  -- Index is bad
+  if (Nodes > 0) then
+    IndexIsBad = (TotalDup/Nodes > 0.9) or (MaxDup/Nodes > 0.3);
+  if (IndexIsBad) then
+  begin
+    if (TotalDup/Nodes > 0.9) then
+    begin
+      TotalDupProps[CellColor] = 255;
+      TotalDupProps[FontColor] = 16777215;
+      TotalDupProps[FontBold] = TRUE;
+      TotalDupProps[CellHint] = 'Index ' + IndexName + ' is bad.' + CRLF + 'It has too many duplicate values';
+    end;
+    if (MaxDup/Nodes > 0.3) then
+    begin
+      MaxDupProps[CellColor] = 255;
+      MaxDupProps[FontColor] = 16777215;
+      MaxDupProps[FontBold] = TRUE;
+      MaxDupProps[CellHint] = 'Index ' + IndexName + ' is bad.' + CRLF + 'It has too many duplicate values';
+    end;
+  end;
+
+  -- Comparing selectivity and real selectivity
+  if ((Selectivity is not null) and (Nodes > 0) and (TotalDup > 0)) then
+  begin
+    Diff = Selectivity - RealSelectivity;
+    DiffPercents = 0;
+    if ((Diff > 0) and (Selectivity <> 0)) then
+      DiffPercents = RealSelectivity / Selectivity;
+    else if ((Diff < 0) and (RealSelectivity <> 0)) then
+      DiffPercents = Selectivity / RealSelectivity;
+
+    if ((DiffPercents > 0) and (DiffPercents < 0.8)) then
+    begin
+      SelectivityProps[CellColor] = 255;
+      SelectivityProps[FontColor] = 16777215;
+      SelectivityProps[FontBold] = TRUE;
+      SelectivityProps[CellHint] = 'Real selectivity differs from the one stored in RDB$INDICES.RDB$STATISTICS.' + CRLF +
+                                   'Try to perform SET STATISTICS for this index';
+    end;
+  end;
+
+  suspend;
+end

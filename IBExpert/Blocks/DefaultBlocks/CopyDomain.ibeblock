@@ -1,0 +1,242 @@
+execute ibeblock (
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant comment 'Domain name to be copied',
+  DestObjectName variant = '' comment 'Destination domain name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+
+  IfDomainExists enum ('Do nothing',             -- 0
+                       'Drop existing domain',   -- 1
+                       'Alter existing domain'   -- 2
+                      ) = 0 comment 'If domain exists already in the target database',
+
+  CopyDomainDescription boolean = TRUE comment 'Copy domain description')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'AVX-MAIN:D:\FB2_DATA\IBEHELP.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    DestDBConnStr = 'AVX-MAIN:D:\FB2_DATA\FORMTEST.FDB';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    SrcObjectName = 'COPY_DOMAIN';
+    DestObjectName = '';
+    DropDomainIfExists = TRUE;
+  end;
+
+  SrcDomainName = SrcObjectName;
+  DestDomainName = DestObjectName;
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    if ((DestDomainName is null) or (DestDomainName = ''))  then
+      DestDomainName = SrcDomainName;
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$field_name
+           from rdb$relation_fields
+           where (rdb$relation_name = 'RDB$FIELDS') and
+                 (rdb$field_name = 'RDB$FIELD_PRECISION')
+           into :bPrecision;
+    bPrecision = ibec_IIF(:bPrecision is NULL, FALSE, TRUE);
+
+    SelStmt = 'select f.rdb$field_type as dom_type,' +
+              'f.rdb$field_length as dom_length,' +
+              'f.rdb$field_sub_type as dom_subtype,' +
+              'f.rdb$field_scale as dom_scale,' +
+              'f.rdb$null_flag as dom_null_flag,' +
+              'f.rdb$character_length as dom_charlen,' +
+              'f.rdb$segment_length as dom_seglen,' +
+              'f.rdb$system_flag as dom_system_flag,' +
+              'f.rdb$computed_source as dom_computedby,' +
+              'f.rdb$default_source as dom_default,' +
+              'f.rdb$validation_source as dom_check,' +
+              'f.rdb$dimensions as dom_dims,' +
+              'f.rdb$description as dom_description,' +
+              'ch.rdb$character_set_name as dom_charset,' +
+              'ch.rdb$bytes_per_character as charset_bytes,' +
+              'dco.rdb$collation_name as dom_collation';
+
+    FromPart = 'from rdb$fields f ' + CRLF +
+              'left join rdb$character_sets ch on f.rdb$character_set_id = ch.rdb$character_set_id' + CRLF +
+              'left join rdb$collations dco on ((f.rdb$collation_id = dco.rdb$collation_id) and (f.rdb$character_set_id = dco.rdb$character_set_id))' + CRLF +
+              'where f.rdb$field_name = :DOMAIN_NAME';
+
+    if (bPrecision) then
+      SrcSelStmt = SelStmt + ', f.rdb$field_precision as dom_precision';
+    SrcSelStmt .= CRLF + FromPart;
+
+    execute statement SrcSelStmt into :SrcDomainData values :SrcDomainName;
+
+
+    ibec_UseConnection(DestDB);
+
+    bUseCommentOn = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+
+    select rdb$field_name
+           from rdb$fields
+           where rdb$field_name = :DestDomainName
+           into :s;
+    DestDomainExists = ibec_IIF(s is NULL, FALSE, TRUE);
+
+    DestDomainNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestDomainName, '"'), ibec_AnsiUpperCase(:DestDomainName));
+    SrcDomainNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcDomainName, '"'), ibec_AnsiUpperCase(:SrcDomainName));
+
+    NeedCreateDomain = TRUE;
+    if (DestDomainExists) then
+    begin
+      if (IfDomainExists = 0) then
+      begin
+        NeedCreateDomain = FALSE;
+        ibec_Progress('Domain ' + DestDomainNameFmt + ' already exists in the target database...');
+      end
+      else if (IfDomainExists = 1) then
+      begin
+        DropStmt = 'DROP DOMAIN ' + DestDomainNameFmt;
+        try
+          ibec_Progress('Dropping ' + DestDomainNameFmt + '...');
+          execute statement :DropStmt;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+      else if (IfDomainExists = 2) then
+      begin
+        NeedCreateDomain = FALSE;
+        ibec_ShowMessage('Not implemented yet.');
+      end
+      else
+        exception domain_exists_already 'Domain "' + DestDomainName + '" exists in the destination database already.';
+    end;
+
+    if (NeedCreateDomain) then
+    begin
+      sType = ibec_IBTypeToStr(SrcDomainData['DOM_TYPE'],
+                               SrcDomainData['DOM_SUBTYPE'],
+                               SrcDomainData['DOM_LENGTH'],
+                               SrcDomainData['DOM_SCALE'],
+                               SrcDomainData['DOM_SEGLEN'],
+                               SrcDomainData['DOM_CHARLEN'],
+                               SrcDomainData['DOM_PRECISION'],
+                               DestDBSQLDialect);
+      CreateDomainStmt = 'CREATE DOMAIN ' + DestDomainNameFmt + ' AS ' + CRLF + sType;
+      if (SrcDomainData['DOM_CHARSET'] is not null) then
+        CreateDomainStmt .= ' CHARACTER SET ' + ibec_Trim(SrcDomainData['DOM_CHARSET']);
+      if ((SrcDomainData['DOM_DEFAULT'] is not null) and (SrcDomainData['DOM_DEFAULT'] <> '')) then
+      begin
+        sDefault = ibec_Trim(SrcDomainData['DOM_DEFAULT']);
+        sDefault = ibec_preg_Replace('^(?i)DEFAULT[\x01-\x20]+', '', sDefault);
+        CreateDomainStmt .= CRLF + 'DEFAULT ' + sDefault;
+      end;
+      if (SrcDomainData['DOM_NULL_FLAG'] = 1) then
+        CreateDomainStmt .= CRLF + 'NOT NULL';
+      if ((SrcDomainData['DOM_CHECK'] is not null) and (SrcDomainData['DOM_CHECK'] <> '')) then
+        CreateDomainStmt .= CRLF + ibec_Trim(SrcDomainData['DOM_CHECK']);
+      if ((SrcDomainData['DOM_COLLATION'] is not null) and (SrcDomainData['DOM_COLLATION'] <> '')) then
+        CreateDomainStmt .= CRLF + 'COLLATE ' + ibec_Trim(SrcDomainData['DOM_COLLATION']);
+
+      try
+        ibec_Progress('Creating domain ' + DestDomainNameFmt + '...');
+        execute statement :CreateDomainStmt;
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+        raise;
+      end;
+
+      DomDesc = SrcDomainData['DOM_DESCRIPTION'];
+      if ((CopyDomainDescription) and (DomDesc is not null)) then
+      begin
+        try
+          ibec_Progress('Setting domain description...');
+          sCommentOnDomain = ibec_Format('COMMENT ON DOMAIN %s IS %s', DestDomainNameFmt, ibec_QuotedStr(DomDesc, ''''));
+          if (bUseCommentOn) then
+            execute statement :sCommentOnDomain;
+          else
+            update rdb$fields set rdb$description = :DomDesc where rdb$field_name = :DestDomainName;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end;
+    end;
+
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || ibec_div((Time2 - Time1), 1000) || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

@@ -1,0 +1,20 @@
+execute ibeblock
+returns (CustNo integer, Company varchar(100), Addr1 varchar(100))
+as
+begin
+  InCust = 3000;
+  OdbcCon = ibec_CreateConnection(__ctODBC, 'DBQ=D:\Delphi5\CMP\mODBC\DB\demo.mdb; DRIVER=Microsoft Access Driver (*.mdb)');
+  ibec_UseConnection(OdbcCon);
+
+  execute statement 'select Company from customer where CustNo = 4312' into :MyCust;
+
+  for select CustNo, Company, Addr1 from customer
+      where CustNo > :InCust
+      order by company
+      into :CustNo, :Company, :Addr1
+  do
+  begin
+    suspend;
+  end
+  ibec_CloseConnection(OdbcCon);
+end

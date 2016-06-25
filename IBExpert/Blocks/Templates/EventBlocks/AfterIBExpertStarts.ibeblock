@@ -1,0 +1,13 @@
+-- Below is a template/example of After IBExpert starts event block
+execute ibeblock (
+  ParamStr variant comment 'The command line parameters array')
+as
+begin
+  exit;
+  s = '';
+  foreach (ParamStr as Param key ParamID skip nulls) do
+  begin
+    s = s + Param + ibec_CRLF();
+  end
+  ibec_ShowMessage(s);
+end

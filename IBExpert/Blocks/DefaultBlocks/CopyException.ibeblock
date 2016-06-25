@@ -1,0 +1,189 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'Exception name to be copied',
+  DestObjectName variant = '' comment 'Destination exception name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyExceptionDescription boolean = TRUE comment 'Copy description',
+  IfExceptionExists enum ('Do nothing, exit',
+                          'Drop and recreate exception',
+                          'Alter exception text') = 0 comment 'If exception exists in the target database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'AVX-MAIN:D:\FB2_DATA\IBEHELP.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    DestDBConnStr = 'AVX-MAIN:D:\FB2_DATA\FORMTEST.FDB';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    --SrcObjectName = 'HELP_ITEMS';
+    --DestObjectName = 'HELP_ITEMS2';
+    SrcObjectName = 'eOrderNotExist';
+    DestObjectName = 'eOrderNotExist';
+  end;
+
+  SrcExcName = SrcObjectName;
+  DestExcName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$exception_name, rdb$exception_number, rdb$message, rdb$description
+           from rdb$exceptions
+           where rdb$exception_name = :SrcExcName
+           into :SrcExcData;
+
+    if (SrcExcData['RDB$EXCEPTION_NAME'] is null) then
+      exception cant_find_exception 'There is no such exception (' + :SrcExcName + ') in the source database.';
+
+    if ((DestExcName is null) or (DestExcName = ''))  then
+      DestExcName = SrcExcName;
+
+    DestExcNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestExcName, '"'), ibec_AnsiUpperCase(:DestExcName));
+    SrcExcNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcExcName, '"'), ibec_AnsiUpperCase(:SrcExcName));
+
+    ibec_UseConnection(DestDB);
+
+    AlterException = FALSE;
+    if (exists(select rdb$exception_name from rdb$exceptions where rdb$exception_name = :DestExcName)) then
+    begin
+      if (IfExceptionExists = 0) then
+      begin
+        ibec_Progress('Exception "' + DestExcName + '" exists in the destination database already.');
+        Exit;
+      end;
+      else if (IfExceptionExists = 1) then
+      begin
+        sDrop = 'DROP EXCEPTION ' + DestExcNameFmt;
+        try
+          ibec_Progress('Dropping exception ' + DestExcNameFmt + '...');
+          execute statement sDrop;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+      else if (IfExceptionExists = 2) then
+        AlterException = TRUE;
+    end
+
+    ExceptionMessage = ibec_Trim(SrcExcData['RDB$MESSAGE']);
+    if (AlterException) then
+      CreateExceptionStmt = 'ALTER EXCEPTION ';
+    else
+      CreateExceptionStmt = 'CREATE EXCEPTION ';
+    CreateExceptionStmt .= DestExcNameFmt + ibec_QuotedStr(ExceptionMessage, '''');
+    
+    try
+      if (AlterException) then
+        ibec_Progress('Altering exception ' + DestExcNameFmt + '...');
+      else
+        ibec_Progress('Creating exception ' + DestExcNameFmt + '...');
+      execute statement :CreateExceptionStmt;
+      commit;
+      ibec_Progress(Success);
+    except
+      ibec_Progress(Failed);
+      rollback;
+      raise;
+    end;
+    
+    if (CopyExceptionDescription and (SrcExcData['RDB$DESCRIPTION'] is not null)) then
+    begin
+      bDestPackages = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+      sDesc = SrcExcData['RDB$DESCRIPTION'];
+      ExcName = ibec_IIF(DestDBSQLDialect = 3, :DestExcName, ibec_AnsiUpperCase(:DestExcName));
+      try
+        ibec_Progress('Setting exception description...');
+        sCommentOnException = ibec_Format('COMMENT ON EXCEPTION %s IS %s', DestExcNameFmt, ibec_QuotedStr(sDesc, ''''));
+        if (bDestPackages) then
+          execute statement :sCommentOnException;
+        else
+          update rdb$exceptions set rdb$description = :sDesc
+                 where (rdb$exception_name = :ExcName);
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+      end;
+    end;
+    
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

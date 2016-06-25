@@ -1,0 +1,43 @@
+execute ibeblock (
+  StatementID variant,
+  SelectedNames variant,
+  SelectedNamesFmt variant,
+  SelectedTypes variant)
+RETURNS (
+  StatementText variant = '')
+as
+begin
+  s = '';
+  CRLF = ibec_CRLF();
+  if (StatementID = 1) then  -- Drop domain(s)...
+  begin
+    foreach (SelectedNames as sName key NameIdx skip nulls) do
+    begin
+      s .= 'DROP DOMAIN ' + SelectedNamesFmt[NameIdx] + ';' + CRLF;
+    end
+    StatementText = s;
+  end;
+
+  else if (StatementID in (2, 3)) then  -- Set description...
+  begin
+    DefDB = ibec_GetDefaultConnection();
+    ibec_UseConnection(DefDB);
+    foreach (SelectedNames as sName key NameIdx skip nulls) do
+    begin
+      select rdb$description from rdb$fields where rdb$field_name = :sName into :sDesc;
+      if (sDesc is NULL) then
+        sDesc = 'NULL';
+      else
+        sDesc = ibec_QuotedStr(sDesc, '''');
+
+      if (StatementID = 2) then
+        s .= 'UPDATE RDB$FIELDS' + CRLF + 'SET RDB$DESCRIPTION = ' + sDesc + CRLF +
+             'WHERE RDB$FIELD_NAME = ' + ibec_QuotedStr(sName, '''') + ';' + CRLF + CRLF;
+      else if (StatementID = 3) then
+        s .= 'COMMENT ON DOMAIN ' + SelectedNamesFmt[NameIdx] + ' IS ' + sDesc + ';' + CRLF + CRLF;
+    end
+    StatementText = s;
+  end;
+
+  suspend;
+end

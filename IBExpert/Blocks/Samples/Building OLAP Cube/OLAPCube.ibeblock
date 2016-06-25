@@ -1,0 +1,21 @@
+execute ibeblock
+as
+Declare Variable num_val numeric(15,2);
+begin
+  SelectSQL = 'select rf.rdb$relation_name, f.rdb$field_type, f.rdb$field_length, f.rdb$field_precision
+               from rdb$relation_fields rf, rdb$fields f
+               where rf.rdb$field_source = f.rdb$field_name';
+
+  vDimensions[0] = 'FieldName=RDB$RELATION_NAME; Alias="Table Name"';
+  vDimensions[1] = 'FieldName=RDB$FIELD_TYPE; Alias="Field Type';
+
+  vMeasures[0] = 'FieldName=RDB$FIELD_TYPE; Alias="Field Count"; CalcType=ctCount; Format=0';
+  vMeasures[1] = 'FieldName=RDB$FIELD_LENGTH; Alias="Total Length"; CalcType=ctSum; Format=0';
+  vMeasures[2] = 'FieldName=RDB$FIELD_PRECISION; Alias="Avg Precision"; CalcType=ctAverage';
+
+  -- Build and save cube in binary format
+  ibec_BuildCube('C:\test_cub.cub', SelectSQL, vDimensions, vMeasures, null);
+
+  -- Build and save cube in XML format
+  ibec_BuildCube('C:\test_cub.xml', SelectSQL, vDimensions, vMeasures, null);
+end

@@ -1,0 +1,78 @@
+/********************************************************************************/
+/* Following IBEBlock is used by IBExpert to produce a text of UPDATE procedure */
+/********************************************************************************/
+
+execute ibeblock (
+  TableName     variant comment 'Table name AS IS',
+  TableNameFmt  variant comment 'Formatted table name (quoted, if necessary)',
+  KeyFields     variant comment 'Array of key field names (names are quoted, if necessary)',
+  KeyFieldTypes variant comment 'Array of key field types',
+  UpdFields     variant comment 'Array of names of fields to be updated (names are quoted, if necessary)',
+  UpdFieldTypes variant comment 'Array of types of fields to be updated')
+RETURNS (
+  SPText      variant = ''    comment 'UPDATE procedure text',
+  DoNotFormat boolean = FALSE comment 'If TRUE, no additional formatting will be performed')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  CRLF = ibec_CRLF();
+  SPName = ibec_FormatIdent(TableName + '_UPD');
+  SPText = 'CREATE PROCEDURE ' + SPName + ' (' + CRLF;
+
+  InParamsStr = '';
+  if (UpdFields is not null) then
+  begin
+    UpperBound = ibec_High(UpdFields);
+    for i = 0 to UpperBound do
+    begin
+      InParamsStr = InParamsStr + '  ' + UpdFields[i] + ' ' + UpdFieldTypes[i];
+      if (i < UpperBound) then
+        InParamsStr = InParamsStr + ',' + CRLF;
+    end;
+  end;
+
+  if (KeyFields is not null) then
+  begin
+    UpperBound = ibec_High(KeyFields);
+    for i = 0 to UpperBound do
+    begin
+      if (InParamsStr <> '') then
+        InParamsStr = ',' + CRLF + InParamsStr;
+      InParamsStr = '  ' + KeyFields[i] + ' ' + KeyFieldTypes[i] + InParamsStr;
+    end;
+  end;
+
+  SPText = SPText + InParamsStr + ')' + CRLF + 'AS' + CRLF + 'BEGIN' + CRLF;
+
+  WhereStr = '';
+  if (KeyFields is not null) then
+  begin
+    UpperBound = ibec_High(KeyFields);
+    for i = 0 to UpperBound do
+    begin
+      WhereStr = WhereStr + '(' + KeyFields[i] + ' = :' + KeyFields[i] + ')';
+      if (i < UpperBound) then
+        WhereStr = WhereStr + ' AND ';
+    end;
+  end;
+
+  UpdateStr = '  UPDATE ' + TableNameFmt + CRLF +
+              '  SET ';
+
+  if (UpdFields is not null) then
+  begin
+    UpperBound = ibec_High(UpdFields);
+    for i = 0 to UpperBound do
+    begin
+      UpdateStr = UpdateStr + UpdFields[i] + ' = :' + UpdFields[i];
+      if (i < UpperBound) then
+        UpdateStr = UpdateStr + ',' + CRLF + '      ';
+    end;
+  end;
+
+  UpdateStr = UpdateStr + CRLF + '  WHERE ' + WhereStr + ';';
+  
+  SPText = SPText + UpdateStr + CRLF + 'END';
+end

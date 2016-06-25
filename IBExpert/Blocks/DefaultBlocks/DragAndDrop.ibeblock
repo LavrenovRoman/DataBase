@@ -1,0 +1,85 @@
+-- Блок добавляет дополнительные, пользовательские варианты статементов
+-- к предопределенным в Эксперте
+
+execute ibeblock (
+  StatementID variant,
+  SelectedNames variant,
+  SelectedNamesFmt variant,
+  SelectedTypes variant,
+  ParentName variant = '',
+  ParentNameFmt variant = '',
+  ParentType variant,
+--------------------------------
+  ObjectAlias variant = '',
+  VarPrefix variant = '',
+  InsertCRLF boolean = FALSE)
+RETURNS (
+  StatementCaptions variant,
+  StatementText variant = '',
+  DoNotFormat boolean = FALSE comment 'If TRUE, no additional formatting will be performed')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of statement text
+  DoNotFormat = TRUE;
+
+  CRLF = ibec_CRLF();
+
+  if (StatementID is null) then
+  begin
+    if (SelectedTypes[0] = __dboDomain) then
+    begin
+      StatementCaptions[101]  = 'Drop domain(s)';
+      StatementCaptions[102]  = 'Set description (direct UPDATE)';
+      StatementCaptions[103]  = 'Set description (COMMENT ON)';
+    end;
+    else if (SelectedTypes[0] = __dboTable) then
+    begin
+      StatementCaptions[201]  = 'Block Example AVX';
+      StatementCaptions[202]  = 'Block Example AVX 2';
+      StatementCaptions[203] = 'Autoincrement trigger';
+    end;
+    else if (SelectedTypes[0] = __dboProcedure) then
+      StatementCaptions[155] = 'Just a test statement (another test)';
+    suspend;
+    exit;
+  end
+
+  if ((StatementID >= 100) and (StatementID < 200)) then
+  begin
+    BlockFile = ibec_GetRunDir() + 'Blocks\DefaultBlocks\DragDropBlocks\DDDomains.ibeblock';
+    if (ibec_FileExists(BlockFile)) then
+    begin
+      DomainsBlock = ibec_LoadFromFile(BlockFile);
+      try
+        execute ibeblock DomainsBlock(StatementID,
+                                      SelectedNames,
+                                      SelectedNamesFmt,
+                                      SelectedTypes)
+                returning_values :StatementText;
+        suspend;
+        exit;
+      except
+      end;
+    end;
+    else
+    begin
+      StatementText = 'Error: Cannot load IBEBlock from ' + CRLF + BlockFile + CRLF + 'Specified file does not exist.';
+      suspend;
+      exit;
+    end;
+  end;
+
+  else if ((StatementID >= 200) and (StatementID < 300)) then
+  begin
+    s = '';
+  end;
+
+  s = '';
+  foreach (SelectedNames as sName key NameIdx skip nulls) do
+  begin
+    s .= sName + CRLF;
+  end
+  StatementText = s;
+
+  suspend;
+end

@@ -1,0 +1,97 @@
+/***************************************************************************************/
+/* Following IBEBlock is used by IBExpert to produce a text of INSERT/UPDATE procedure */
+/***************************************************************************************/
+
+execute ibeblock (
+  TableName     variant comment 'Table name AS IS',
+  TableNameFmt  variant comment 'Formatted table name (quoted, if necessary)',
+  KeyFields     variant comment 'Array of key field names (names are quoted, if necessary)',
+  KeyFieldTypes variant comment 'Array of key field types',
+  InsFields     variant comment 'Array of names of fields to be inserted (names are quoted, if necessary)',
+  InsFieldTypes variant comment 'Array of types of fields to be inserted',
+  UpdFields     variant comment 'Array of names of fields to be updated (names are quoted, if necessary)',
+  UpdFieldTypes variant comment 'Array of types of fields to be updated')
+RETURNS (
+  SPText      variant = ''    comment 'INSERT/UPDATE procedure text',
+  DoNotFormat boolean = FALSE comment 'If TRUE, no additional formatting will be performed')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  CRLF = ibec_CRLF();
+  SPName = ibec_FormatIdent(TableName + '_IU');
+  SPText = 'CREATE PROCEDURE ' + SPName + ' (' + CRLF;
+
+  if (InsFields is not null) then
+  begin
+    UpperBound = ibec_High(InsFields);
+    for i = 0 to UpperBound do
+    begin
+      SPText = SPText + '  ' + InsFields[i] + ' ' + InsFieldTypes[i];
+      if (i < UpperBound) then
+        SPText = SPText + ',' + CRLF;
+    end;
+    SPText = SPText + ')' + CRLF + 'AS' + CRLF + 'BEGIN' + CRLF;
+  end;
+
+  FieldsStr = '';
+  WhereStr = '';
+  if (KeyFields is not null) then
+  begin
+    UpperBound = ibec_High(KeyFields);
+    for i = 0 to UpperBound do
+    begin
+      FieldsStr = FieldsStr + KeyFields[i];
+      WhereStr = WhereStr + '(' + KeyFields[i] + ' = :' + KeyFields[i] + ')';
+      if (i < UpperBound) then
+      begin
+        FieldsStr = FieldsStr + ',';
+        WhereStr = WhereStr + ' AND ';
+      end;
+    end;
+  end;
+
+  IfExists = 'IF (EXISTS(SELECT ' + FieldsStr + ' FROM ' + TableNameFmt + ' WHERE ' + WhereStr + ')) THEN';
+  SPText = SPText + '  ' + IfExists + CRLF;
+  
+  UpdateStr = '    UPDATE ' + TableNameFmt + CRLF +
+              '    SET ';
+
+  if (UpdFields is not null) then
+  begin
+    UpperBound = ibec_High(UpdFields);
+    for i = 0 to UpperBound do
+    begin
+      UpdateStr = UpdateStr + UpdFields[i] + ' = :' + UpdFields[i];
+      if (i < UpperBound) then
+        UpdateStr = UpdateStr + ',' + CRLF + '        ';
+    end;
+  end;
+
+  UpdateStr = UpdateStr + CRLF + '    WHERE ' + WhereStr + ';';
+  
+  SPText = SPText + UpdateStr + CRLF + '  ELSE' ;
+
+  InsertIntoStr = '';
+  InsertValuesStr = '';
+
+  if (InsFields is not null) then
+  begin
+    UpperBound = ibec_High(InsFields);
+    for i = 0 to UpperBound do
+    begin
+      InsertIntoStr = InsertIntoStr + '        ' + InsFields[i];
+      InsertValuesStr = InsertValuesStr + '        :' + InsFields[i];
+      if (i < UpperBound) then
+      begin
+        InsertIntoStr = InsertIntoStr + ',' + CRLF;
+        InsertValuesStr = InsertValuesStr + ',' + CRLF;
+      end;
+    end;
+  end;
+
+  InsertIntoStr = '    INSERT INTO ' + TableNameFmt + ' (' + CRLF + InsertIntoStr + ')' + CRLF +
+                  '    VALUES (' + CRLF + InsertValuesStr + ');';
+  SPText = SPText + CRLF + InsertIntoStr + CRLF + 'END';
+end

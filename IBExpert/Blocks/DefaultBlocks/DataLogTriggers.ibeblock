@@ -1,0 +1,113 @@
+-- !!! DO NOT CHANGE INPUT/OUTPUT PARAMETER NAMES !!!
+execute ibeblock (
+
+
+  DatabaseProps    variant  comment 'Current database properties',
+  -- Following database properties available:
+  -- DatabaseProps['Aias'] - alias of registered database
+  -- DatabaseProps['ServerName'] - server name of registered database
+  -- DatabaseProps['FileName'] - database file name
+  -- DatabaseProps['ServerVersion'] - server version
+  -- DatabaseProps['SQLDialect'] - SQL dialect of the database
+  DataAction       smallint comment 'Data action: 0 - INSERT, 1 - UPDATE, 2 - DELETE',
+  TableName        variant  comment 'Table name',
+  TableNameFmt     variant  comment 'Formatted table name (quoted if necessary)',
+  KeyFields        variant  comment 'List of primary key field names',
+  KeyFieldsFmt     variant  comment 'List of formatted names of key fields',
+  LogFields        variant  comment 'List of names of to be logged',
+  LogFieldsFmt     variant  comment 'List of formatted names of fields to be logged',
+  LogFieldsTypes   variant  comment 'List of types of fields to be logged',
+  LogFieldsLengths variant  comment 'List of lengths of fields to be logged')
+returns (
+  TriggerBody      variant = ''    comment 'Body of logging trigger',
+  DoNotFormat      boolean = FALSE comment 'If TRUE, no additional formatting will be performed')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  CRLF = ibec_CRLF();
+  actInsert = 0;
+  actUpdate = 1;
+  actDelete = 2;
+
+  sAction = '';
+  sPref = 'OLD.';
+  if (DataAction = actInsert) then
+  begin
+    sAction = 'I';
+    sPref = 'NEW.';
+    sNonBlobFldTemplate = '  IF (NEW.%FIELD_NAME_FORMATTED% IS NOT NULL) THEN' + CRLF +
+                          '    INSERT INTO IBE$LOG_FIELDS (LOG_TABLES_ID, FIELD_NAME, OLD_VALUE, NEW_VALUE)' + CRLF +
+                          '           VALUES (:TID, ''%FIELD_NAME_ASIS%'', NULL, NEW.%FIELD_NAME_FORMATTED%);';
+    sBlobFldTemplate    = '  IF (NEW.%FIELD_NAME_FORMATTED% IS NOT NULL) THEN' + CRLF +
+                          '    INSERT INTO IBE$LOG_BLOB_FIELDS (LOG_TABLES_ID, FIELD_NAME, OLD_BLOB_VALUE, NEW_BLOB_VALUE)' + CRLF +
+                          '           VALUES (:TID,''%FIELD_NAME_ASIS%'',NULL, NEW.%FIELD_NAME_FORMATTED%);';
+  end;
+  else if (DataAction = actUpdate) then
+  begin
+    sAction = 'U';
+    sNonBlobFldTemplate = '  IF ((OLD.%FIELD_NAME_FORMATTED% IS NULL AND NEW.%FIELD_NAME_FORMATTED% IS NOT NULL) OR' + CRLF +
+                            '      (NEW.%FIELD_NAME_FORMATTED% IS NULL AND OLD.%FIELD_NAME_FORMATTED% IS NOT NULL) OR' + CRLF +
+                            '      (NEW.%FIELD_NAME_FORMATTED% IS NOT NULL AND OLD.%FIELD_NAME_FORMATTED% IS NOT NULL AND NEW.%FIELD_NAME_FORMATTED% <> OLD.%FIELD_NAME_FORMATTED%)) THEN' + CRLF +
+                            '     INSERT INTO IBE$LOG_FIELDS (LOG_TABLES_ID, FIELD_NAME, OLD_VALUE, NEW_VALUE)' + CRLF +
+                            '            VALUES (:TID, ''%FIELD_NAME_ASIS%'', OLD.%FIELD_NAME_FORMATTED%, NEW.%FIELD_NAME_FORMATTED%);';
+    if (DatabaseProps['ServerVersion'] in (__svFB15, __svFB20, __svFB21, __svFB25)) then
+    begin
+      if (DatabaseProps['ServerVersion'] in (__svFB20, __svFB21, __svFB25)) then
+        sNonBlobFldTemplate = '  IF (OLD.%FIELD_NAME_FORMATTED% IS DISTINCT FROM NEW.%FIELD_NAME_FORMATTED%) THEN' + CRLF +
+                              '     INSERT INTO IBE$LOG_FIELDS (LOG_TABLES_ID, FIELD_NAME, OLD_VALUE, NEW_VALUE)' + CRLF +
+                              '            VALUES (:TID, ''%FIELD_NAME_ASIS%'', OLD.%FIELD_NAME_FORMATTED%, NEW.%FIELD_NAME_FORMATTED%);';
+
+      sBlobFldTemplate = ibec_StringReplace(sNonBlobFldTemplate, 'INTO IBE$LOG_FIELDS', 'INTO IBE$LOG_BLOB_FIELDS', __rfIgnoreCase);
+      sBlobFldTemplate = ibec_StringReplace(sBlobFldTemplate, 'OLD_VALUE', 'OLD_BLOB_VALUE', __rfIgnoreCase);
+      sBlobFldTemplate = ibec_StringReplace(sBlobFldTemplate, 'NEW_VALUE', 'NEW_BLOB_VALUE', __rfIgnoreCase);
+    end;
+    else
+    begin
+      sBlobFldTemplate    = '  INSERT INTO IBE$LOG_BLOB_FIELDS (LOG_TABLES_ID, FIELD_NAME, OLD_BLOB_VALUE, NEW_BLOB_VALUE)' + CRLF +
+                            '         VALUES (:TID, ''%FIELD_NAME_ASIS%'', OLD.%FIELD_NAME_FORMATTED%, NEW.%FIELD_NAME_FORMATTED%);';
+    end;
+  end;
+  else if (DataAction = actDelete) then
+  begin
+    sAction = 'D';
+    sNonBlobFldTemplate = '  INSERT INTO IBE$LOG_FIELDS (LOG_TABLES_ID, FIELD_NAME, OLD_VALUE, NEW_VALUE)' + CRLF +
+                          '         VALUES (:TID, ''%FIELD_NAME_ASIS%'', OLD.%FIELD_NAME_FORMATTED%, NULL);';
+    sBlobFldTemplate    = '  INSERT INTO IBE$LOG_BLOB_FIELDS (LOG_TABLES_ID, FIELD_NAME, OLD_BLOB_VALUE, NEW_BLOB_VALUE)' + CRLF +
+                          '         VALUES (:TID, ''%FIELD_NAME_ASIS%'', OLD.%FIELD_NAME_FORMATTED%, NULL);';
+  end;
+
+  TriggerBody = 'AS' + CRLF +
+                'DECLARE VARIABLE tid INTEGER;' + CRLF +
+                'BEGIN' + CRLF +
+                '  tid = GEN_ID(ibe$log_tables_gen,1);' + CRLF + CRLF +
+                '  INSERT INTO ibe$log_tables (id, table_name, operation, date_time, user_name)' + CRLF +
+                '         VALUES (:tid, ' + ibec_QuotedStr(TableName, '''') + ', ' + ibec_QuotedStr(sAction, '''') + ', ''NOW'', USER);' + CRLF + CRLF;
+
+  sKeys = '';
+  foreach (KeyFields as FldName index FldKey skip nulls) do
+  begin
+    sKeys .= '  INSERT INTO ibe$log_keys (log_tables_id, key_field, key_value)' + CRLF +
+             '         VALUES (:tid, ' + ibec_QuotedStr(FldName, '''') + ', ' + sPref + KeyFieldsFmt[FldKey] +');' + CRLF + CRLF;
+  end;
+
+  TriggerBody .= sKeys;
+
+  sFields = '';
+  foreach (LogFields as FldName index FldKey skip nulls) do
+  begin
+    iType = LogFieldsTypes[FldKey];
+    FldNameEx = ibec_StringReplace(FldName, '''', '''''', __rfReplaceAll);
+    if ((iType = 261) or (LogFieldsLengths[FldKey] > 255)) then
+      s = ibec_StringReplace(sBlobFldTemplate, '%FIELD_NAME_ASIS%', FldNameEx, __rfIgnoreCase + __rfReplaceAll);
+    else
+      s = ibec_StringReplace(sNonBlobFldTemplate, '%FIELD_NAME_ASIS%', FldNameEx, __rfIgnoreCase + __rfReplaceAll);
+    s = ibec_StringReplace(s, '%FIELD_NAME_FORMATTED%', LogFieldsFmt[FldKey], __rfIgnoreCase + __rfReplaceAll);
+    sFields .= s + CRLF + CRLF;
+  end;
+
+  TriggerBody .= sFields + CRLF + 'END;';
+  suspend;
+end;
+

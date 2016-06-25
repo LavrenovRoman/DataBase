@@ -1,0 +1,47 @@
+/********************************************************************************/
+/* Following IBEBlock is used by IBExpert to produce a text of INSERT procedure */
+/********************************************************************************/
+
+execute ibeblock (
+  TableName     variant comment 'Table name AS IS',
+  TableNameFmt  variant comment 'Formatted table name (quoted, if necessary)',
+  InsFields     variant comment 'Array of names of fields to be inserted (names are quoted, if necessary)',
+  InsFieldTypes variant comment 'Array of types of fields to be inserted')
+RETURNS (
+  SPText      variant = ''    comment 'INSERT procedure text',
+  DoNotFormat boolean = FALSE comment 'If TRUE, no additional formatting will be performed')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  CRLF = ibec_CRLF();
+  SPName = ibec_FormatIdent(TableName + '_INS');
+  SPText = 'CREATE PROCEDURE ' + SPName + ' (' + CRLF;
+
+  InParamsStr = '';
+  FieldsStr = '';
+  ValuesStr = '';
+  if (InsFields is not null) then
+  begin
+    UpperBound = ibec_High(InsFields);
+    for i = 0 to UpperBound do
+    begin
+      InParamsStr = InParamsStr + '  ' + InsFields[i] + ' ' + InsFieldTypes[i];
+      FieldsStr = FieldsStr + '    ' + InsFields[i];
+      ValuesStr = ValuesStr + '    :' + InsFields[i];
+      if (i < UpperBound) then
+      begin
+        InParamsStr = InParamsStr + ',' + CRLF;
+        FieldsStr = FieldsStr + ',' + CRLF;
+        ValuesStr = ValuesStr + ',' + CRLF;
+      end;
+    end;
+  end;
+
+  SPText = SPText + InParamsStr + ')' + CRLF + 'AS' + CRLF + 'BEGIN' + CRLF +
+           '  INSERT INTO ' + TableNameFmt + ' (' + CRLF +
+           FieldsStr + ')' + CRLF +
+           '  VALUES (' + CRLF +
+           ValuesStr + ');' + CRLF + 'END';
+end

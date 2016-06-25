@@ -1,0 +1,88 @@
+execute ibeblock (iii integer, ivc varchar(100))
+returns (id integer, ename varchar(100), company varchar(100))
+as
+begin
+--  drop database 'localhost/3060:c:\db1.fdb' user 'SYSDBA' password 'masterkey'
+--  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+--  drop database 'localhost/3060:c:\db2.fdb' user 'SYSDBA' password 'masterkey'
+--  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+  create database 'localhost/3060:c:\db1.fdb' user 'SYSDBA' password 'masterkey'
+  page_size 4096 sql_dialect 3
+  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+  create database 'localhost/3060:c:\db2.fdb' user 'SYSDBA' password 'masterkey'
+  page_size 4096 sql_dialect 3
+  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+
+  create connection db1 dbname 'localhost/3060:c:\db1.fdb'
+  password 'masterkey' user 'SYSDBA'
+  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+  create connection db2 dbname 'localhost/3060:c:\db2.fdb'
+  password 'masterkey' user 'SYSDBA'
+  sql_dialect 3
+  clientlib 'C:\Program Files\Firebird\bin\fbclient.dll';
+
+  use db1;
+
+  vstmt = 'create table "employees" ( ' || '
+     id integer not null primary key,
+     full_name varchar(100),
+     company_id integer)';
+
+
+  execute statement :vstmt;
+
+  commit;
+
+  use default;
+
+  select count(*) from help_items into :icount;
+
+  use db1;
+
+  insert into "employees" (id, full_name, company_id) values (1, 'Alexander Khvastunov', 2);
+  insert into "employees" (id, full_name, company_id) values (2, 'Bill Gates', 1);
+  insert into "employees" (id, full_name, company_id) values (3, 'John Doe', NULL);
+  insert into "employees" (id, full_name, company_id) values (4, 'Vladimir Putin', 3);
+  insert into "employees" (id, full_name, company_id) values (5, 'Somebody', 15);
+
+  use db2;
+
+  execute statement
+  'create table companies (
+     id integer not null primary key,
+     company_name varchar(100))';
+
+  commit;
+
+  insert into companies (id, company_name) values (1, 'Microsoft');
+  insert into companies (id, company_name) values (2, 'HK-Software');
+  insert into companies (id, company_name) values (3, 'The Kremlin?');
+
+  commit;
+
+  use db1;
+
+  for execute statement 'select id, full_name, company_id
+  from "employees"'
+  into :id, :ename, :cid
+  do
+  begin
+    use db2;
+
+    company = NULL;
+
+    select company_name from companies
+    where id = :cid
+    into :company;
+
+    suspend;
+  end
+
+  close connection db1;
+  close connection db2;
+end

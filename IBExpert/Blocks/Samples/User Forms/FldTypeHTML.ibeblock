@@ -1,0 +1,71 @@
+execute ibeblock (
+   FType integer,
+   FSubType integer,
+   FLen integer,
+   FScale integer, 
+   FSegmentSize integer,
+   FCharLen integer,
+   FPrecision integer,
+   SQLDialect integer = 3)
+returns (TypeAsString varchar(200))
+as
+begin
+  TypeAsString = '';
+  if ((FCharLen = 0) or (FCharLen is NULL)) then
+    FCharLen = FLen;
+
+  if (FType = 261) then
+    TypeAsString = '<B>BLOB SUB_TYPE</B> ' || FSubType || ' <B>SEGMENT SIZE</B> ' || FSegmentSize;
+  else if (FType = 14) then
+    TypeAsString = '<B>CHAR</B>(' || FCharLen || ')';
+  else if (FType = 37) then
+    TypeAsString = '<B>VARCHAR</B>(' || FCharLen || ')';
+  else if (FType = 12) then
+    TypeAsString = '<B>DATE</B>';
+  else if (FType = 13) then
+    TypeAsString = '<B>TIME</B>';
+  else if (FType = 35) then
+  begin
+    if (SQLDialect = 3) then
+      TypeAsString = '<B>TIMESTAMP</B>';
+    else
+      TypeAsString = '<B>DATE</B>';
+  end
+  else if (FType in (7, 8, 27, 16)) then
+  begin
+    if ((FScale < 0) or (FSubType = 1) or (FSubType = 2)) then
+    begin
+      if (FSubType = 2) then
+        TypeAsString = '<B>DECIMAL</B>';
+      else
+        TypeAsString = '<B>NUMERIC</B>';
+
+      sPrec = FPrecision;
+      if (FPrecision is NULL) then
+      begin
+        if (FType = 7) then
+          sPrec = '4';
+        else if (FType = 8) then
+          sPrec = '9';
+        else if (FType = 27) then
+          sPrec = '15';
+        else if (FType = 16) then
+          sPrec = '18';
+      end
+      else
+        sPrec = FPrecision;
+      TypeAsString = TypeAsString || '(' || sPrec || ',' || (FScale * -1) || ')';
+    end
+    else if (FType = 7) then
+      TypeAsString = '<B>SMALLINT</B>';
+    else if (FType = 8) then
+      TypeAsString = '<B>INTEGER</B>';
+    else if (FType = 27) then
+      TypeAsString = '<B>DOUBLE PRECISION</B>';
+    else if (FType = 16) then
+      TypeAsString = '<B>BIGINT</B>';
+  end
+  else if (FType = 10) then
+    TypeAsString = '<B>FLOAT</B>';
+  suspend;
+end

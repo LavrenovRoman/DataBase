@@ -1,0 +1,16 @@
+-- Below is a template/example of After Metadata Change block
+execute ibeblock (
+  DatabaseID integer comment 'Internal ID (within IBExpert) of the active database',
+  StatementList variant comment 'Array of commited statements',
+  Sender integer comment 'Sender: 0 - object editors; 1 - SQL Editor; 2 - Script Executive'
+)
+as
+begin
+  Exit;
+
+  foreach (StatementList as StmtSource key StmtID skip nulls) do
+  begin
+    FileName = 'W:\Stmt_' || StmtID || '.sql';
+    ibec_SaveToFile(FileName, StmtSource, 0);
+  end;
+end

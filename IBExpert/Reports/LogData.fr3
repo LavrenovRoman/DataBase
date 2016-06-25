@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TfrxReport Name="" Version="3.17" DotMatrixReport="False" IniFile="\Software\Fast Reports" PreviewOptions.Buttons="2047" PreviewOptions.Zoom="1" PrintOptions.Printer="Default" ReportOptions.CreateDate="38604,8893207407" ReportOptions.Description.Text="" ReportOptions.LastChange="38604,8897034144" ScriptLanguage="PascalScript" ScriptText.Text="begin&#13;&#10;&#13;&#10;end." PropData="044C65667403D00103546F7003A10008446174617365747301010C1B00000020446174615365744E616D653D226672444244617461536574312200010C1D00000020446174615365744E616D653D2266725573657244617461736574312200010C1D00000020446174615365744E616D653D226672557365724461746173657432220000095661726961626C65730100055374796C650100">
+  <TfrxReportPage Name="Page1" PaperWidth="210" PaperHeight="297" PaperSize="9" LeftMargin="3" RightMargin="3" TopMargin="6" BottomMargin="10" Columns="1" ColumnWidth="0" ColumnPositions.Text="0" HGuides.Text="" VGuides.Text="">
+    <TfrxPageHeader Name="PageHeader1" Height="43" Left="0" Top="20" Width="771,02412">
+      <TfrxMemoView Name="Memo30" Left="43" Top="2" Width="96" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Tahoma" Font.Style="0" ParentFont="False" Text="Date / Time:"/>
+      <TfrxMemoView Name="Memo31" Left="43" Top="17" Width="96" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Tahoma" Font.Style="0" ParentFont="False" Text="Server:"/>
+      <TfrxMemoView Name="Memo32" Left="369" Top="2" Width="96" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Tahoma" Font.Style="0" ParentFont="False" Text="User:"/>
+      <TfrxMemoView Name="Memo33" Left="148" Top="2" Width="217" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Tahoma" Font.Style="1" ParentFont="False" Text="[DATE_TIME]"/>
+      <TfrxMemoView Name="Memo34" Left="148" Top="17" Width="216" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Tahoma" Font.Style="1" ParentFont="False" Text="[SERVER_NAME]"/>
+      <TfrxMemoView Name="Memo35" Left="474" Top="2" Width="247" Height="14" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-11" Font.Name="Tahoma" Font.Style="1" ParentFont="False" Text="[USER_NAME]"/>
+      <TfrxLineView Name="Line1" Left="43" Top="35" Width="679" Height="0" Frame.Typ="4" Frame.Width="2"/>
+    </TfrxPageHeader>
+    <TfrxMasterData Name="bDomainName" Height="23" Left="0" Top="124" Width="771,02412" AllowSplit="True" Columns="1" ColumnWidth="200" ColumnGap="20" PrintIfDetailEmpty="True" RowCount="0" Stretched="True">
+      <TfrxMemoView Name="Memo1" Left="30" Top="1" Width="686" Height="20" StretchMode="smMaxHeight" Font.Charset="1" Font.Color="0" Font.Height="-13" Font.Name="Courier New" Font.Style="0" ParentFont="False" Text="[LOG_DATA]"/>
+    </TfrxMasterData>
+  </TfrxReportPage>
+</TfrxReport>

@@ -1,0 +1,54 @@
+execute ibeblock
+returns (info varchar(1000))
+as
+begin
+  select i.rdb$index_name, i.rdb$relation_name, i.rdb$unique_flag,
+         i.rdb$index_inactive, i.rdb$index_type
+  from rdb$indices i
+  left join rdb$relation_constraints rc on (i.rdb$index_name = rc.rdb$index_name)
+  where (i.rdb$system_flag is null) and (rc.rdb$index_name is null)
+  as dataset ds_indices;
+
+  while (not ibec_ds_eof(ds_indices)) do
+  begin
+    IdxName = ibec_trim(ibec_ds_getfield(ds_indices,0));
+    IdxRelName = ibec_trim(ibec_ds_getfield(ds_indices,1));
+    IdxUnique = ibec_ds_getfield(ds_indices,2);
+    IdxInactive = ibec_ds_getfield(ds_indices,3);
+    IdxType = ibec_ds_getfield(ds_indices,4);
+
+    sFields = '';
+    for select rdb$field_name from rdb$index_segments
+        where rdb$index_name = :IdxName
+        order by rdb$field_position
+        into :IdxField
+    do
+    begin
+      IdxField = ibec_trim(IdxField);
+      if (sFields <> '') then
+        sFields = sFields || ', ';
+      sFields = sFields || ibec_formatident(IdxField);
+    end
+
+    DropStmt   = 'drop index ' || ibec_formatident(IdxName);
+    CreateStmt = 'create ' || ibec_iif(IdxUnique = 1, 'unique ', '') || ibec_iif(IdxType = 1, 'descending ', '') ||
+                 ' index ' || ibec_formatident(IdxName) ||
+                 ' on ' || ibec_formatident(IdxRelName) || ' (' || sFields || ')';
+
+    info = DropStmt;
+    suspend;
+    ibec_progress(info);
+    execute statement :DropStmt;
+    commit;
+  
+    info = CreateStmt;
+    suspend;
+    ibec_progress(info);
+    execute statement :CreateStmt;
+    commit;
+
+    ibec_ds_next(ds_indices);
+  end
+
+  close dataset ds_indices;
+end

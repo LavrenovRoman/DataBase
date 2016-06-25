@@ -1,0 +1,54 @@
+execute ibeblock
+returns(outstr varchar(100))
+as
+begin
+  -- First, let's create a simple CSV-file with some data
+  FS = ibec_fs_OpenFile('C:\MyData.csv', __fmCreate);
+  if (not FS is null) then
+  begin
+    s = '1:John:Doe:M';
+    ibec_fs_Writeln(FS, s);
+    s = '2:Bill:Gates:M';
+    ibec_fs_Writeln(FS, s);
+    s = '3:Sharon:Stone:F';
+    ibec_fs_Writeln(FS, s);
+    s = '4:Stephen:King:M';
+    ibec_fs_Writeln(FS, s);
+    ibec_fs_CloseFile(FS);
+  end
+
+  -- If table IBE$$TEST_PEOPLE exists we'll drop it
+  if (exists(select rdb$relation_name from rdb$relations where rdb$relation_name = 'IBE$$TEST_PEOPLE')) then
+  begin
+    s = 'DROP TABLE IBE$$TEST_PEOPLE';
+    execute statement s;
+    commit;
+  end
+
+  -- Let's create a new table that will store the imported data
+  s = 'CREATE TABLE IBE$$TEST_PEOPLE (
+       ID integer, 
+       FIRST_NAME varchar(50),
+       LAST_NAME varchar(50),
+       SEX varchar(1))';
+  execute statement s;
+  commit;
+
+  i = 0; -- Just a counter of inserted records
+  FS = ibec_fs_OpenFile('C:\MyData.csv', __fmOpenRead);
+  if (not FS is null) then
+  begin
+    while (not ibec_fs_Eof(FS)) do
+    begin
+      s = ibec_fs_Readln(FS);
+      ValCount = ibec_ParseCSVLine(Vals, s, '', ':', __csvEmptyStringAsNull);
+      INSERT INTO IBE$$TEST_PEOPLE (ID, FIRST_NAME, LAST_NAME, SEX) VALUES :Vals;
+      commit;
+      i = i + 1;
+    end
+    ibec_fs_CloseFile(FS);
+  end
+
+  outstr = i || ' records inserted into IBE$$TEST_PEOPLE';
+  suspend;
+end

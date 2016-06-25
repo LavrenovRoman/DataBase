@@ -1,0 +1,379 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'Procedure name to be copied',
+  DestObjectName variant = '' comment 'Destination procedure name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyDomains boolean = TRUE comment 'Copy domains (Firebird 2.1)',
+  DropProcedureIfExists boolean = FALSE comment 'Try to drop procedure if the one exists in the destination database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'localHOST/3070:D:\FB25_DATA\TESTFB21.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird25\bin\fbclient.dll';
+  
+    DestDBConnStr = 'localHOST/3070:D:\FB25_DATA\TESTFB21.FBA';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird25\bin\fbclient.dll';
+  
+    SrcObjectName = 'TEST_DOMAINS';
+    DestObjectName = 'TEST_DOMAINS$$';
+    DropProcedureIfExists = TRUE;
+  end;
+
+  SrcProcName = SrcObjectName;
+  DestProcName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$procedure_name, rdb$procedure_source, rdb$description
+           from rdb$procedures
+           where rdb$procedure_name = :SrcProcName
+           into :SrcProcData;
+
+    if (SrcProcData['RDB$PROCEDURE_NAME'] is null) then
+      exception cant_find_proc 'There is no such procedure (' + :SrcProcName + ') in the source database.';
+
+    if ((DestProcName is null) or (DestProcName = ''))  then
+      DestProcName = SrcProcName;
+
+    DestProcNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestProcName, '"'), ibec_AnsiUpperCase(:DestProcName));
+    SrcProcNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcProcName, '"'), ibec_AnsiUpperCase(:SrcProcName));
+
+    ibec_UseConnection(DestDB);
+
+    if (exists(select rdb$procedure_name from rdb$procedures where rdb$procedure_name = :DestProcName)) then
+    begin
+      if (DropProcedureIfExists) then
+      begin
+        DropStmt = 'DROP PROCEDURE ' + DestProcNameFmt;
+
+        try
+          ibec_Progress('Dropping procedure ' + DestProcNameFmt + '...');
+          execute statement :DropStmt;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+      else
+        exception proc_exists_already 'Procedure "' + DestProcName + '" exists in the destination database already.';
+    end
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$field_name
+           from rdb$relation_fields
+           where (rdb$relation_name = 'RDB$FIELDS') and
+                 (rdb$field_name = 'RDB$FIELD_PRECISION')
+           into :bPrecision;
+    bPrecision = ibec_IIF(:bPrecision is NULL, FALSE, TRUE);
+    
+    select rdb$field_name
+           from rdb$relation_fields
+           where (rdb$relation_name = 'RDB$PROCEDURE_PARAMETERS') and
+                 (rdb$field_name = 'RDB$PARAMETER_MECHANISM')
+           into :bTypeOfAllowed;
+    bTypeOfAllowed = ibec_IIF(:bTypeOfAllowed is NULL, FALSE, TRUE);
+
+    select rdb$field_name
+           from rdb$relation_fields
+           where (rdb$relation_name = 'RDB$PROCEDURE_PARAMETERS') and
+                 (rdb$field_name = 'RDB$RELATION_NAME')
+           into :bTypeOfColumnAllowed;
+    bTypeOfColumnAllowed = ibec_IIF(:bTypeOfColumnAllowed is NULL, FALSE, TRUE);
+
+    bSrcPackages = exists(select rdb$relation_name from rdb$relations
+                          where (rdb$relation_name = 'RDB$PACKAGES'));
+
+    
+    SelStmt = 'select pp.rdb$parameter_name as param_name,' +
+                     'pp.rdb$parameter_type as param_in_out,' +
+                     'pp.rdb$field_source as param_domain,' +
+                     'pp.rdb$description as param_description,' +
+                     'f.rdb$field_type as dom_type,' +
+                     'f.rdb$field_length as dom_length,' +
+                     'f.rdb$field_sub_type as dom_subtype,' +
+                     'f.rdb$field_scale as dom_scale,' +
+                     'f.rdb$null_flag as dom_null_flag,' +
+                     'f.rdb$character_length as dom_charlen,' +
+                     'f.rdb$segment_length as dom_seglen,' +
+                     'f.rdb$system_flag as dom_system_flag,' +
+                     'f.rdb$computed_source as dom_computedby,' +
+                     'f.rdb$default_source as dom_default,' +
+                     'f.rdb$dimensions as dom_dims,' +
+                     'f.rdb$description as dom_description,' +
+                     'ch.rdb$character_set_name as dom_charset,' +
+                     'ch.rdb$bytes_per_character as charset_bytes,' +
+                     'dco.rdb$collation_name as dom_collation,';
+                     
+    if (bPrecision) then
+      SelStmt = SelStmt + 'f.rdb$field_precision as dom_precision,';
+    else
+      SelStmt = SelStmt + 'cast(0 as integer) as dom_precision,';
+      
+    if (bTypeOfAllowed) then
+      SelStmt = SelStmt + 'pp.rdb$default_source as param_default_value,' +
+                          'pp.rdb$parameter_mechanism as param_mechanism,' +
+                          'pp.rdb$null_flag as param_null_flag,';
+    else
+      SelStmt = SelStmt + 'f.rdb$default_source as param_default_value,' +
+                          'cast(0 as integer) as param_mechanism,' +
+                          'cast(0 as integer) as param_null_flag,';
+
+    if (bTypeOfColumnAllowed) then
+      SelStmt = SelStmt + 'pp.rdb$relation_name as param_relation_name,' +
+                          'pp.rdb$field_name as param_field_name';
+    else
+      SelStmt = SelStmt + 'cast(null as varchar(64)) as param_relation_name,' +
+                          'cast(null as varchar(64)) as param_field_name';
+
+    SelStmt = SelStmt + CRLF +
+              'from rdb$procedure_parameters pp ' + CRLF +
+              'left join rdb$fields f on pp.rdb$field_source = f.rdb$field_name' + CRLF +
+              'left join rdb$character_sets ch on f.rdb$character_set_id = ch.rdb$character_set_id' + CRLF +
+              'left join rdb$collations dco on ((f.rdb$collation_id = dco.rdb$collation_id) and (f.rdb$character_set_id = dco.rdb$character_set_id))' + CRLF +
+              'where (pp.rdb$procedure_name = ' + ibec_QuotedStr(:SrcProcName, '''') + ')' + CRLF;
+
+    if (bSrcPackages) then
+      SelStmt = SelStmt + 'and (pp.rdb$package_name is null)' + CRLF;
+
+    SelStmt = SelStmt + 'order by pp.rdb$parameter_type, pp.rdb$parameter_number';
+
+
+    ibec_Progress('Collecting params info...');
+    i = 0;
+    iUserDomainCount = 0;
+    for execute statement SelStmt into :ParamData
+    do
+    begin
+      sParamDomain = ibec_Trim(ParamData['PARAM_DOMAIN']);
+      if ((ParamData['PARAM_MECHANISM'] = 1) or (ibec_Pos('RDB$', sParamDomain) <> 1))  then
+      begin
+        aDomains[i] = sParamDomain;
+        iUserDomainCount = iUserDomainCount + 1;
+      end;
+
+      aParams[i] = ibec_Trim(ParamData['PARAM_NAME']);
+
+      sType = ibec_IBTypeToStr(ParamData['DOM_TYPE'],
+                               ParamData['DOM_SUBTYPE'],
+                               ParamData['DOM_LENGTH'],
+                               ParamData['DOM_SCALE'],
+                               ParamData['DOM_SEGLEN'],
+                               ParamData['DOM_CHARLEN'],
+                               ParamData['DOM_PRECISION'],
+                               DestDBSQLDialect);
+      aTypes[i] = sType;
+
+      aParamsComment[i] = ParamData['PARAM_DESCRIPTION'];
+      aDomainsComputedBy[i] = ParamData['DOM_COMPUTEDBY'];
+      aParamsIsInput[i] = ibec_IIF(ParamData['PARAM_IN_OUT'] = 0, TRUE, FALSE);
+      aParamsMechanism[i] = ParamData['PARAM_MECHANISM'];
+      aParamsDefault[i] = ibec_Coalesce(ParamData['PARAM_DEFAULT_VALUE'], ParamData['DOM_DEFAULT']);
+      aParamsNullFlag[i] = ibec_Coalesce(ParamData['PARAM_NULL_FLAG'], 0);
+      aParamsRelationName[i] = ibec_Coalesce(ParamData['PARAM_RELATION_NAME'], '');
+      aParamsFieldName[i] = ibec_Coalesce(ParamData['PARAM_FIELD_NAME'], '');
+      i = i + 1;
+    end
+
+    ibec_UseConnection(DestDB);
+    DomainsAreOK = TRUE;
+    if (CopyDomains and (iUserDomainCount > 0)) then
+    begin
+      foreach (aDomains as Dom key DomIdx skip nulls) do
+      begin
+        if (exists(select rdb$field_name from rdb$fields where rdb$field_name = :Dom)) then
+          Continue;
+        DomNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:Dom, '"'), ibec_AnsiUpperCase(:Dom));
+        CreateStmt = 'CREATE DOMAIN ' + DomNameFmt + ' AS ' +  sType;
+        try
+          ibec_Progress('Creating domain ' + DomNameFmt + '...');
+          execute statement :CreateStmt;
+          commit;
+          ibec_Progress(Success);
+        except
+          DomainsAreOK = FALSE;
+          ibec_Progress(Failed);
+          rollback;
+        end;
+      end;
+    end;
+
+
+    sInParams = '';
+    sOutParams = '';
+
+    CreateStmt = 'CREATE PROCEDURE ' + DestProcNameFmt;
+    foreach (aParams as ParamName index ParamKey skip nulls) do
+    begin
+      sType = '';
+      ParamNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:ParamName, '"'), ibec_AnsiUpperCase(:ParamName));
+      sParam = ParamNameFmt;
+      DomName = aDomains[ParamKey];
+      if (DomName is not null) then
+      begin
+        DomNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DomName, '"'), ibec_AnsiUpperCase(:DomName));
+        if (aParamsMechanism[ParamKey] = 1) then
+        begin
+          if (aParamsRelationName[ParamKey] <> '') then
+          begin
+            RelName = ibec_Trim(aParamsRelationName[ParamKey]);
+            RelNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:RelName, '"'), ibec_AnsiUpperCase(:RelName));
+            FieldName = ibec_Trim(aParamsFieldName[ParamKey]);
+            FieldNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FieldName, '"'), ibec_AnsiUpperCase(:FieldName));
+            sParam .= ' TYPE OF COLUMN ' + RelNameFmt + '.' + FieldNameFmt;
+          end
+          else
+            sParam .= ' TYPE OF ' + DomNameFmt;
+        end
+        else
+          sParam .= ' ' + DomNameFmt;
+      end
+      else
+        sParam .= ' ' + aTypes[ParamKey];
+      if (aParamsIsInput[ParamKey]) then
+      begin
+        if (sInParams <> '') then
+          sInParams .= ',' + CRLF;
+        sInParams .= '    ' + sParam;
+        if (aParamsNullFlag[ParamKey] = 1) then
+          sInParams .= ' NOT NULL';
+        if (aParamsDefault[ParamKey] is not null) then
+        begin
+          sDefault = ibec_Trim(aParamsDefault[ParamKey]);
+          sDefault = ibec_preg_Replace('^(?i)(DEFAULT|\=)[\x01-\x20]+', '', sDefault);
+          sInParams .= ' DEFAULT ' + sDefault;
+        end;
+      end
+      else
+      begin
+        if (sOutParams <> '') then
+          sOutParams .= ',' + CRLF;
+        sOutParams .= '    ' + sParam;
+      end;
+    end
+    if (sInParams <> '') then
+      CreateStmt .= ' (' + CRLF + sInParams + ')';
+    if (sOutParams <> '') then
+      CreateStmt .= CRLF + 'RETURNS (' + sOutParams + ')';
+    CreateStmt .= CRLF + 'AS' + CRLF + SrcProcData['RDB$PROCEDURE_SOURCE'];
+
+    ibec_UseConnection(DestDB);
+    bUseCommentOn = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+    try
+      ibec_Progress('Creating procedure ' + DestProcNameFmt + '...');
+      execute statement :CreateStmt;
+      commit;
+      ibec_Progress(Success);
+
+      ProcName = ibec_IIF(DestDBSQLDialect = 3, :DestProcName, ibec_AnsiUpperCase(:DestProcName));
+      if (SrcProcData['RDB$DESCRIPTION'] is not null) then
+      begin
+        ProcDesc = SrcProcData['RDB$DESCRIPTION'];
+        sCommentOnProc = ibec_Format('COMMENT ON PROCEDURE %s IS %s', DestProcNameFmt, ibec_QuotedStr(ProcDesc, ''''));
+        ibec_Progress('Setting procedure description...');
+        if (bUseCommentOn) then
+          execute statement :sCommentOnProc;
+        else
+          update rdb$procedures set rdb$description = :ProcDesc
+                 where rdb$procedure_name = :ProcName;
+        commit;
+        ibec_Progress(Success);
+      end;
+
+      foreach (aParamsComment as ParamComment key ParamKey skip nulls) do
+      begin
+        ParamName = aParams[ParamKey];
+        ParamNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:ParamName, '"'), ibec_AnsiUpperCase(:ParamName));
+        sCommentOnParam = ibec_Format('COMMENT ON PARAMETER %s.%s IS %s', DestProcNameFmt, ParamNameFmt, ibec_QuotedStr(ParamComment, ''''));
+        ibec_progress('Setting description for parameter ' + ParamName + '...');
+        if (bUseCommentOn) then
+          execute statement :sCommentOnParam;
+        else
+          update rdb$procedure_parameters set rdb$description = :ParamComment
+                 where (rdb$procedure_name = :ProcName) and (rdb$parameter_name = :ParamName);
+        ibec_Progress(Success);
+      end;
+      commit;
+    except
+      ibec_Progress(Failed);
+      rollback;
+    end;
+
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

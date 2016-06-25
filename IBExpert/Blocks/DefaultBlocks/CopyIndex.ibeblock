@@ -1,0 +1,356 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'Index name to be copied',
+  DestObjectName variant = '' comment 'Destination index name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyIndexDescription boolean = TRUE comment 'Copy index description',
+  IfIndexExists enum ('Do nothing, exit',
+                      'Drop and recreate index') = 0 comment 'If index exists in the target database',
+  IfIndexIsKey  enum ('Do nothing, exit',
+                      'Drop and recreate primary/foreign key') = 0 comment 'If index is a primary/foreign key')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'AVX-MAIN:D:\FB2_DATA\IBEHELP.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    DestDBConnStr = 'AVX-MAIN:D:\FB2_DATA\FORMTEST.FDB';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    SrcObjectName = 'FK_HELP_ITEMS';
+    DestObjectName = 'FK_HELP_ITEMS';
+    IfIndexExists = 1;
+    IfIndexIsKey = 1;
+  end;
+
+  SrcIndexName = SrcObjectName;
+  DestIndexName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    select i.rdb$index_name, i.rdb$relation_name, i.rdb$unique_flag, i.rdb$index_inactive,
+           i.rdb$index_type, i.rdb$expression_source, i.rdb$description,
+           rc.rdb$constraint_name, rc.rdb$constraint_type
+           from rdb$indices i
+           left join rdb$relation_constraints rc on i.rdb$index_name = rc.rdb$index_name
+           where i.rdb$index_name = :SrcIndexName
+           into :SrcIndexData;
+
+    if (SrcIndexData['RDB$INDEX_NAME'] is null) then
+      exception cant_find_index 'There is no such index (' + :SrcIndexName + ') in the source database.';
+
+    TableName = ibec_Trim(SrcIndexData['RDB$RELATION_NAME']);
+    TableNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:TableName, '"'), ibec_AnsiUpperCase(:TableName));
+
+    Val = SrcIndexData['RDB$UNIQUE_FLAG'];
+    IdxUnique = ibec_IIF((Val is null) or (Val = 0), '', 'UNIQUE ');
+    Val = SrcIndexData['RDB$INDEX_INACTIVE'];
+    IdxActive = ibec_IIF((Val is null) or (Val = 0), '', 'INACTIVE ');
+    Val = SrcIndexData['RDB$INDEX_TYPE'];
+    IdxType = ibec_IIF((Val is null) or (Val = 0), '', 'DESCENDING ');
+    IdxExpression = SrcIndexData['RDB$EXPRESSION_SOURCE'];
+
+
+    ibec_UseConnection(DestDB);
+    select rdb$relation_name from rdb$relations
+           where rdb$relation_name = :TableName
+           into :DestTableName;
+    if (DestTableName is null) then
+       exception cant_find_table 'There is no such table (' + :TableNameFmt + ') in the source database.';
+
+    IsPrimaryKey = ibec_IIF(SrcIndexData['RDB$CONSTRAINT_TYPE'] = 'PRIMARY KEY', TRUE, FALSE);
+    IsForeignKey = ibec_IIF(SrcIndexData['RDB$CONSTRAINT_TYPE'] = 'FOREIGN KEY', TRUE, FALSE);
+
+    if ((DestIndexName is null) or (DestIndexName = ''))  then
+      DestIndexName = SrcIndexName;
+
+    DestIndexNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestIndexName, '"'), ibec_AnsiUpperCase(:DestIndexName));
+    SrcIndexNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcIndexName, '"'), ibec_AnsiUpperCase(:SrcIndexName));
+
+    ConstraintName = ibec_Trim(SrcIndexData['RDB$CONSTRAINT_NAME']);
+    ConstraintNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:ConstraintName, '"'), ibec_AnsiUpperCase(:ConstraintName));
+
+
+
+    ibec_UseConnection(SrcDB);
+    RefFields = '';
+    if (IsForeignKey and (IfIndexIsKey = 1)) then
+    begin
+      select rc1.rdb$relation_name, refc.rdb$const_name_uq, rc2.rdb$index_name,
+             refc.rdb$update_rule, refc.rdb$delete_rule
+             from rdb$relation_constraints rc1, rdb$ref_constraints refc, rdb$relation_constraints rc2
+             where (rc1.rdb$constraint_name = refc.rdb$const_name_uq) and
+                   (refc.rdb$const_name_uq = rc2.rdb$constraint_name) and
+                   (refc.rdb$constraint_name = :ConstraintName)
+             into :FKData;
+      FKTableName = ibec_Trim(FKData['RDB$RELATION_NAME']);
+      ibec_UseConnection(DestDB);
+      select rdb$relation_name
+             from rdb$relations
+             where (rdb$relation_name = :FKTableName) and (rdb$view_blr is null)
+             into :DestFKTableName;
+      commit;
+      if (DestFKTableName is null) then
+        exception cant_find_fktable 'Foreign table (' + :FKTableName + ') is missing in the source database.';
+
+      FKTableNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FKTableName, '"'), ibec_AnsiUpperCase(:FKTableName));
+      FKIndexName = ibec_Trim(FKData['RDB$INDEX_NAME']);
+      for select rdb$field_name
+          from rdb$index_segments
+          where rdb$index_name = :FKIndexName
+          order by rdb$field_position
+          into :FieldName
+      do
+      begin
+        FieldName = ibec_Trim(FieldName);
+        FieldNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FieldName, '"'), ibec_AnsiUpperCase(:FieldName));
+        if (RefFields <> '') then
+          RefFields .= ', ';
+        RefFields .= FieldNameFmt;
+      end;
+      commit;
+    end;
+
+    ibec_UseConnection(DestDB);
+    if (exists(select rdb$index_name from rdb$indices where rdb$index_name = :DestIndexName)) then
+    begin
+      if (IfIndexExists = 0) then
+      begin
+        ibec_Progress('Index "' + DestIndexName + '" exists in the destination database already.');
+        Exit;
+      end;
+      else if (IfIndexExists = 1) then
+      begin
+        if (IsPrimaryKey or IsForeignKey) then
+        begin
+          if (IfIndexIsKey = 0) then
+          begin
+            ibec_Progress('Index is a primary or foreign key.');
+            Exit;
+          end;
+        end
+        else
+        begin
+          sDrop = 'DROP INDEX ' + DestIndexNameFmt;
+          try
+            ibec_Progress('Dropping index ' + DestIndexNameFmt + '...');
+            execute statement sDrop;
+            commit;
+            ibec_Progress(Success);
+          except
+            ibec_Progress(Failed);
+            rollback;
+            raise;
+          end;
+        end;
+      end;
+    end
+
+    if ((IsPrimaryKey or IsForeignKey) and (IfIndexIsKey = 0)) then
+      Exit;
+
+    sDrop = '';
+    ibec_UseConnection(DestDB);
+    if (IsPrimaryKey) then
+    begin
+      select rdb$constraint_name, rdb$index_name
+             from rdb$relation_constraints
+             where (rdb$relation_name = :TableName) and (rdb$constraint_type = 'PRIMARY KEY')
+             into :PKData;
+      if (PKData is not null) then
+      begin
+        PKName = ibec_Trim(PKData['RDB$CONSTRAINT_NAME']);
+        PKNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:PKName, '"'), ibec_AnsiUpperCase(:PKName));
+        KeyNameFmt = PKNameFmt;
+        sDrop = 'ALTER TABLE ' + TableNameFmt + ' DROP CONSTRAINT ' + PKNameFmt;
+      end;
+    end
+    else if (IsForeignKey) then
+    begin
+      for select rdb$constraint_name, rdb$index_name
+                 from rdb$relation_constraints
+                 where (rdb$relation_name = :TableName) and (rdb$constraint_type = 'FOREIGN KEY')
+                 into :FKData
+      do
+      begin
+        FKName = ibec_Trim(FKData['RDB$CONSTRAINT_NAME']);
+        FKNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FKName, '"'), ibec_AnsiUpperCase(:FKName));
+        KeyNameFmt = FKNameFmt;
+        sDrop = 'ALTER TABLE ' + TableNameFmt + ' DROP CONSTRAINT ' + FKNameFmt;
+      end;
+    end;
+    if (sDrop <> '') then
+    begin
+      try
+        ibec_Progress('Dropping constraint ' + KeyNameFmt + '...');
+        execute statement sDrop;
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+        raise;
+      end;
+    end;
+
+    ibec_UseConnection(SrcDB);
+    IdxFields = '';
+    for select rdb$field_name
+        from rdb$index_segments
+        where rdb$index_name = :SrcIndexName
+        order by rdb$field_position
+        into :FieldName
+    do
+    begin
+      FieldName = ibec_Trim(FieldName);
+      FieldNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FieldName, '"'), ibec_AnsiUpperCase(:FieldName));
+      if (IdxFields <> '') then
+        IdxFields .= ', ';
+      IdxFields .= FieldNameFmt;
+    end;
+    
+
+    if (IsPrimaryKey or IsForeignKey) then
+    begin
+      CreateIndexStmt = 'ALTER TABLE ' + TableNameFmt + ' ADD';
+      if (ibec_Copy(SrcIndexData['RDB$CONSTRAINT_NAME'],1,4) <> 'RDB$') then
+        CreateIndexStmt .= ' CONSTRAINT ' + DestIndexNameFmt;
+      CreateIndexStmt .= ' ' + ibec_Trim(SrcIndexData['RDB$CONSTRAINT_TYPE']) + ' (' + IdxFields + ')';
+      if (IsForeignKey) then
+      begin
+        CreateIndexStmt .= ' REFERENCES ' + FKTableNameFmt + ' (' + RefFields + ')';
+      end;
+    end
+    else
+    begin
+      CreateIndexStmt = 'CREATE ' + IdxUnique + IdxType + 'INDEX ' + DestIndexNameFmt + ' ON ' +
+                          TableNameFmt;
+      if (IdxExpression is not null) then
+        CreateIndexStmt .= ' COMPUTED BY (' + IdxExpression + ')';
+      else
+        CreateIndexStmt .= ' (' + IdxFields + ')';
+    end;
+
+
+    ibec_UseConnection(DestDB);
+    try
+      if (IsPrimaryKey) then
+        ibec_Progress('Creating primary key ' + DestIndexNameFmt + '...');
+      else if (IsForeignKey) then
+        ibec_Progress('Creating foreign key ' + DestIndexNameFmt + '...');
+      else
+        ibec_Progress('Creating index ' + DestIndexNameFmt + '...');
+      execute statement :CreateIndexStmt;
+      commit;
+      if (IdxActive <> '') then
+      begin
+        ibec_Progress(BS + ' Making inactive...');
+        execute statement 'ALTER INDEX ' || DestIndexNameFmt || ' INACTIVE';
+        commit;
+      end;
+      ibec_Progress(Success);
+    except
+      ibec_Progress(Failed);
+      rollback;
+      raise;
+    end;
+
+    if (CopyIndexDescription and (SrcIndexData['RDB$DESCRIPTION'] is not null)) then
+    begin
+      bUseCommentOn = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+      sDesc = SrcIndexData['RDB$DESCRIPTION'];
+      IndexName = ibec_IIF(DestDBSQLDialect = 3, :DestIndexName, ibec_AnsiUpperCase(:DestIndexName));
+      try
+        ibec_Progress('Setting index description...');
+        sCommentOnIndex =  ibec_Format('COMMENT ON INDEX %s IS %s', DestIndexNameFmt, ibec_QuotedStr(sDesc, ''''));
+        if (bUseCommentOn) then
+          execute statement :sCommentOnIndex;
+        else
+          update rdb$indices set rdb$description = :sDesc
+                 where (rdb$index_name = :RoleName);
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+      end;
+    end;
+    
+
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

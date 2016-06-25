@@ -1,0 +1,47 @@
+/********************************************************************************/
+/* Following IBEBlock is used by IBExpert to produce a text of SELECT procedure */
+/********************************************************************************/
+
+execute ibeblock (
+  TableName     variant comment 'Table name AS IS',
+  TableNameFmt  variant comment 'Formatted table name (quoted, if necessary)',
+  SelFields     variant comment 'Array of names of fields to be selected (names are quoted, if necessary)',
+  SelFieldTypes variant comment 'Array of types of fields to be selected')
+RETURNS (
+  SPText      variant = ''    comment 'SELECT procedure text',
+  DoNotFormat boolean = FALSE comment 'If TRUE, no additional formatting will be performed')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  CRLF = ibec_CRLF();
+  SPName = ibec_FormatIdent(TableName + '_SEL');
+  SPText = 'CREATE PROCEDURE ' + SPName + CRLF + 'RETURNS (' + CRLF;
+
+  SelStr = '';
+  IntoStr = '';
+  if (SelFields is not null) then
+  begin
+    UpperBound = ibec_High(SelFields);
+    for i = 0 to UpperBound do
+    begin
+      SPText = SPText + '  ' + SelFields[i] + ' ' + SelFieldTypes[i];
+      SelStr = SelStr + SelFields[i];
+      IntoStr = IntoStr + ':' + SelFields[i];
+      if (i < UpperBound) then
+      begin
+        SPText = SPText + ',' + CRLF;
+        SelStr = SelStr + ',' + CRLF + '             ';
+        IntoStr = IntoStr + ',' + CRLF + '           ';
+      end;
+    end;
+
+    SelStr = '  FOR SELECT ' + SelStr + CRLF + '      FROM ' + TableNameFmt;
+
+    SPText = SPText + ')' + CRLF + 'AS' + CRLF + 'BEGIN' + CRLF + SelStr + CRLF +
+             '      INTO ' + IntoStr + CRLF + '  DO' + CRLF + '  BEGIN' + CRLF +
+             '    SUSPEND;' + CRLF + '  END';
+  end;
+  SPText = SPText + CRLF + 'END';
+end

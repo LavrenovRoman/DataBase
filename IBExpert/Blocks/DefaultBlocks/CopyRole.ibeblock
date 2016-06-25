@@ -1,0 +1,268 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'Table name to be copied',
+  DestObjectName variant = '' comment 'Destination table name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyRoleDescription boolean = TRUE comment 'Copy role description',
+  CopyRoleMembers boolean = TRUE comment 'Copy role memberships',
+  CopyRoleRights boolean = TRUE comment 'Copy role rights',
+  IfRoleExists enum ('Do nothing, exit',
+                     'Drop and recreate role') = 0 comment 'If role exists in the target database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'AVX-MAIN:D:\FB2_DATA\IBEHELP.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    DestDBConnStr = 'AVX-MAIN:D:\FB2_DATA\FORMTEST.FDB';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    --SrcObjectName = 'HELP_ITEMS';
+    --DestObjectName = 'HELP_ITEMS2';
+    SrcObjectName = 'SUPER_ROLE';
+    DestObjectName = 'SUPER_ROLE';
+  end;
+
+  SrcRoleName = SrcObjectName;
+  DestRoleName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$role_name, rdb$description
+           from rdb$roles
+           where rdb$role_name = :SrcRoleName
+           into :SrcRoleData;
+
+    if (SrcRoleData['RDB$ROLE_NAME'] is null) then
+      exception cant_find_role 'There is no such role (' + :SrcRoleName + ') in the source database.';
+
+    if ((DestRoleName is null) or (DestRoleName = ''))  then
+      DestRoleName = SrcRoleName;
+
+    DestRoleNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestRoleName, '"'), ibec_AnsiUpperCase(:DestRoleName));
+    SrcRoleNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcRoleName, '"'), ibec_AnsiUpperCase(:SrcRoleName));
+
+    ibec_UseConnection(DestDB);
+
+    if (exists(select rdb$role_name from rdb$roles where rdb$role_name = :DestRoleName)) then
+    begin
+      if (IfRoleExists = 0) then
+      begin
+        ibec_Progress('Role "' + DestRoleName + '" exists in the destination database already.');
+        Exit;
+      end;
+      else if (IfRoleExists = 1) then
+      begin
+        sDrop = 'DROP ROLE ' + DestRoleNameFmt;
+        try
+          ibec_Progress('Dropping role ' + DestRoleNameFmt + '...');
+          execute statement sDrop;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end;
+    end
+
+    CreateRoleStmt = 'CREATE ROLE ' + DestRoleNameFmt;
+    
+    try
+      ibec_Progress('Creating role ' + DestRoleNameFmt + '...');
+      execute statement :CreateRoleStmt;
+      commit;
+      ibec_Progress(Success);
+    except
+      ibec_Progress(Failed);
+      rollback;
+      raise;
+    end;
+    
+    if (CopyRoleDescription and (SrcRoleData['RDB$DESCRIPTION'] is not null)) then
+    begin
+      bDestPackages = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+      sDesc = SrcRoleData['RDB$DESCRIPTION'];
+      RoleName = ibec_IIF(DestDBSQLDialect = 3, :DestRoleName, ibec_AnsiUpperCase(:DestRoleName));
+      try
+        ibec_Progress('Setting role description...');
+        sCommentOnRole = ibec_Format('COMMENT ON ROLE %s IS %s', DestRoleNameFmt, ibec_QuotedStr(sDesc, ''''));
+        if (bDestPackages) then
+          execute statement :sCommentOnRole;
+        else
+          update rdb$roles set rdb$description = :sDesc
+                 where (rdb$role_name = :RoleName);
+        commit;
+        ibec_Progress(Success);
+      except
+        ibec_Progress(Failed);
+        rollback;
+      end;
+    end;
+    
+    if (CopyRoleMembers) then
+    begin
+      ibec_UseConnection(SrcDB);
+      for select rdb$user, rdb$grant_option
+          from rdb$user_privileges
+          where (rdb$relation_name = :SrcRoleName) and
+                (rdb$privilege = 'M')
+          into :MemberData
+      do
+      begin
+        ibec_UseConnection(DestDB);
+        sMember = ibec_Trim(MemberData['RDB$USER']);
+        sMemberFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:sMember, '"'), ibec_AnsiUpperCase(:sMember));
+        sGrant = 'GRANT ' + DestRoleNameFmt + ' TO ' + sMemberFmt;
+        if (MemberData['RDB$GRANT_OPTION'] = 1) then
+          sGrant .= ' WITH GRANT OPTION';
+        else if (MemberData['RDB$GRANT_OPTION'] = 2) then
+          sGrant .= ' WITH ADMIN OPTION';
+        try
+          execute statement sGrant;
+          commit;
+        except
+          rollback;
+        end;
+      end;
+    end;
+    
+    if (CopyRoleRights) then
+    begin
+      iCount = 0;
+      ibec_Progress('Copying role privileges...');
+      ibec_UseConnection(SrcDB);
+      
+      for select rdb$privilege, rdb$grant_option, rdb$relation_name, rdb$field_name, rdb$object_type
+          from rdb$user_privileges
+          where (rdb$user = :SrcRoleName) and
+                (rdb$user_type = '13')
+          into :GrantData
+      do
+      begin
+        sGrant = 'GRANT ';
+        sPrivilege = ibec_Trim(GrantData['RDB$PRIVILEGE']);
+        if (sPrivilege = 'S') then
+          sGrant .= 'SELECT';
+        else if (sPrivilege = 'I') then
+          sGrant .= 'INSERT';
+        else if (sPrivilege = 'U') then
+          sGrant .= 'UPDATE';
+        else if (sPrivilege = 'D') then
+          sGrant .= 'DELETE';
+        else if (sPrivilege = 'R') then
+          sGrant .= 'REFERENCES';
+        else if (sPrivilege = 'X') then
+          sGrant .= 'EXECUTE';
+        sGrant .= ' ON';
+        if (sPrivilege = 'X') then
+          sGrant .= ' PROCEDURE';
+          
+        sObjectName = ibec_Trim(GrantData['RDB$RELATION_NAME']);
+        sObjectNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:sObjectName, '"'), ibec_AnsiUpperCase(:sObjectName));
+        sGrant .= ' ' + sObjectNameFmt;
+
+        sFieldName = GrantData['RDB$FIELD_NAME'];
+        if (sFieldName is not null) then
+        begin
+          sFieldName = ibec_Trim(sFieldName);
+          sFieldsNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:sFieldName, '"'), ibec_AnsiUpperCase(:sFieldName));
+          sGrant .= ' (' + sFieldsNameFmt + ')';
+        end
+        
+        sGrant .= ' TO ' + DestRoleNameFmt;
+
+        ibec_UseConnection(DestDB);
+        try
+          execute statement sGrant;
+          ibec_Progress('    ' + sGrant);
+          iCount = iCount + 1;
+          if (ibec_Mod(iCount,100) = 0) then
+          begin
+            ibec_Progress('   Commiting...');
+            commit;
+          end;
+        except
+        end;
+      end;
+      ibec_UseConnection(DestDB);
+      commit;
+    end;
+
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

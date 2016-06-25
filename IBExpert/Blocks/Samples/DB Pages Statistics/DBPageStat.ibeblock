@@ -1,0 +1,83 @@
+-- http://www.firebirdsql.org/manual/fbint-page-2.html
+
+execute ibeblock (DBFileName varchar(1000) comment 'Path to database file')
+returns (
+  PageType varchar(100) comment 'Page Type',
+  PageCount integer comment 'Page Count',
+  PagePercent numeric(15,2) comment 'Page %',
+  PageMb numeric(15,2) comment 'Size, Mb')
+as
+begin
+  TimeStart = ibec_GetTickCount();
+  iPageIndex = 0;
+  aPages = ibec_Array(0,0,0,0,0,0,0,0,0,0,0);
+  aPageTypes = ibec_Array('Unused', 'Database Header', 'Page Inventory Page', 'Transaction Inventory Page', 'Pointer Page',
+                          'Data Page', 'Index Root Page', 'Index Page', 'Blob Data Page', 'Generator Page', 'Write Ahead Log');
+
+  aBitMasks = ibec_Array(1, 2, 4, 8, 16, 32, 64, 128);
+
+  fs = ibec_fs_OpenFile(DBFileName, __fmOpenRead + __fmShareDenyNone);
+  if (fs is null) then
+    Exit;
+  try
+    ibec_fs_Seek(fs, 16, __soFromBeginning);
+
+    iPageSize = ibec_fs_ReadWord(fs);
+    iPageSizeSub20 = iPageSize - 20;
+
+    ibec_fs_Seek(fs, iPageSize + 20, __soFromBeginning);
+    sPIP = ibec_fs_ReadString(fs, iPageSizeSub20);
+    NextPIPIndex = iPageSizeSub20 * 8 - 1;
+
+    ibec_fs_Seek(fs, 0, __soFromBeginning);
+    while (not ibec_fs_Eof(fs)) do
+    begin
+      if (ibec_mod(iPageIndex, 100) = 0) then
+      begin
+        TimeSpent = ibec_Div(ibec_GetTickCount() - TimeStart, 1000);
+        iSpeed = ibec_IIF((iPageIndex = 0) or (TimeSpent = 0), 0, ((iPageSize / 1024) * iPageIndex) / 1024 / TimeSpent);
+        ibec_Progress(iPageIndex || '  :  ' || TimeSpent || '  :  ' || iSpeed || ' Mb/s');
+      end;
+      iVal = ibec_fs_ReadByte(fs);
+
+      iPIPBytePos = ibec_mod(ibec_div(iPageIndex, 8), iPageSizeSub20) + 1;
+      iPIPBitMaskIdx = ibec_mod(iPageIndex, 8);
+      if (iPIPBitMaskIdx = 0) then
+        iPIPByte = ibec_Ord(ibec_Copy(sPIP, iPIPBytePos, 1));
+      iPIPBitMask = aBitMasks[iPIPBitMaskIdx];
+      IsUsed = (ibec_and(iPIPBitMask, iPIPByte) = 0);
+
+      if (IsUsed) then
+        aPages[iVal] = aPages[iVal] + 1;
+      else
+        aPages[0] = aPages[0] + 1;
+
+      if (iPageIndex = NextPIPIndex) then
+      begin
+        ibec_fs_Seek(fs, 19, __soFromCurrent);
+        sPIP = ibec_fs_ReadString(fs, iPageSizeSub20);
+        NextPIPIndex = NextPIPIndex + iPageSizeSub20 * 8;
+      end;
+
+      iPageIndex = iPageIndex + 1;
+      ibec_fs_Seek(fs, iPageIndex * iPageSize, __soFromBeginning);
+    end;
+
+    PageType = 'Total Pages';
+    PageCount = iPageIndex;
+    PagePercent = 100;
+    PageMb = (PageCount * (iPageSize / 1024)) / 1024;
+    suspend;
+
+    foreach (aPages as PageCnt key Idx skip nulls) do
+    begin
+      PageType = aPageTypes[Idx];
+      PageCount = PageCnt;
+      PagePercent = (PageCnt/iPageIndex) * 100;
+      PageMb = (PageCount * (iPageSize / 1024)) / 1024;
+      suspend;
+    end
+  finally
+    ibec_fs_CloseFile(fs);
+  end
+end

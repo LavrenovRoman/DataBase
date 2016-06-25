@@ -1,0 +1,5 @@
+execute ibeblock
+as
+begin
+  ibec_CreateModelScript('C:\model.grc', 'C:\model.sql', __msoDontQuoteIdents + __msoIncludeDescriptions);
+end

@@ -1,0 +1,70 @@
+execute ibeblock
+returns (info varchar(100))
+as
+begin
+  RecNum = 10000;
+
+  if (exists (select rdb$relation_name from rdb$relations where rdb$relation_name = 'IBE$$TEST_DATA')) then
+  begin
+    execute statement 'drop table IBE$$TEST_DATA';
+    commit;
+  end
+
+  execute statement
+  'create table IBE$$TEST_DATA (
+     F_INTEGER integer,
+     F_VARCHAR varchar(100),
+     F_DATE date,
+     F_TIME time,
+     F_TIMESTAMP timestamp, 
+     F_NUMERIC numeric(15,2),
+     F_BOOL char(1) check (F_BOOL in (''T'', ''F'')),
+     F_BLOB blob sub_type 1,
+     F_SEASON varchar(15) check(F_SEASON in (''Spring'', ''Summer'', ''Autumn'', ''Winter'')),
+     F_RELS varchar(64))';
+  commit;
+
+  StartTime = ibec_gettickcount();
+
+  i = 0;
+  for select rdb$relation_name
+  from rdb$relations
+  into :rel_names
+  do
+  begin
+    rels[i] = :rel_names;
+    i = i + 1;
+  end
+
+  i = 0;
+  while (i < RecNum) do
+  begin
+    fint    = ibec_random2(1, 100000);
+    fvarc   = ibec_randomstring(1,100,65,90);
+    fdate   = ibec_random2(20000,40000);
+    ftime   = ibec_random(0);
+    ftimest = ibec_random2(20000,40000) + ibec_random(0);
+    fnum    = ibec_random2(1,40000) + ibec_random(0);
+    fbool   = ibec_randomval('T','F');
+    fblob   = ibec_randomstring(500, 1000, 0, 255);
+    fseason = ibec_randomval('Spring', 'Summer', 'Autumn', 'Winter');
+    frel    = rels[ibec_random2(0,ibec_high(rels))];
+
+    insert into IBE$$TEST_DATA values (:fint, :fvarc, :fdate, :ftime, :ftimest, :fnum, :fbool, :fblob, :fseason, :frel);
+    i = i + 1;
+
+    if (ibec_mod(i, 500) = 0) then
+    begin
+      ibec_progress(i || ' records inserted...');
+      commit;
+    end
+  end
+
+  commit;
+
+  EndTime = ibec_gettickcount();
+  info = 'Total time: ' || ((EndTime - StartTime) / 1000) || ' seconds';
+  suspend;
+  info = 'Per record: ' || ((EndTime - StartTime) / 1000 / RecNum) || ' seconds';
+  suspend;
+end

@@ -1,0 +1,8 @@
+-- Below is a template/example of After connect to database event block
+execute ibeblock(
+  DatabaseID integer comment 'Internal ID (within IBExpert) of the connected database',
+  IsReconnect boolean comment 'Indicates that Reconnect was performed for active database')
+as
+begin
+  exit;
+end

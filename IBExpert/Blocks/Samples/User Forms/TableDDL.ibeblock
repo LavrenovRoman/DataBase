@@ -1,0 +1,64 @@
+execute ibeblock (
+  Frm variant,
+  Op variant)
+as
+begin
+  FldType = ibec_LoadFromFile('E:\IBEBlocks\FldTypeHTML.ibeblock');
+
+  TableID = ibec_uf_GetElementAttribute(Frm, 'TableSelect', 'value', 0);
+  sDDL = '';
+  if (TableID is not null) then
+  begin
+    select rdb$relation_name from rdb$relations where rdb$relation_id = :TableID into :sTableName;
+    sTableName = ibec_trim(sTableName);
+    sDDL = '<B>CREATE TABLE</B> ' || sTableName || '(' || ibec_Chr(13) || ibec_chr(10);
+
+    for select rf.rdb$field_name, rf.rdb$field_source, rf.rdb$field_position,
+               f.rdb$field_type, f.rdb$field_length, f.rdb$field_scale,
+               f.rdb$field_sub_type, f.rdb$field_precision, f.rdb$character_length,
+               f.rdb$segment_length, rf.rdb$null_flag, chr.rdb$character_set_name
+        from rdb$relation_fields rf, rdb$relations r, rdb$fields f
+        left join rdb$character_sets chr on (f.rdb$character_set_id = chr.rdb$character_set_id)
+        where (rf.rdb$relation_name = r.rdb$relation_name) and
+              (rf.rdb$field_source = f.rdb$field_name) and
+
+              (r.rdb$relation_id = :TableID)
+        order by 2
+        into :FieldName, :fDomain, :FieldPos, :fType, :fLen, :fScale, :fSubType, :fPrec, :fCharLen,
+             :fSegLen, :fNullFlag, :fCharset
+    do
+    begin
+      sType = ibec_trim(fDomain);
+      IsDomainBased = FALSE;
+      if (ibec_Copy(sType, 1, 4) <> 'RDB$') then
+        IsDomainBased = TRUE;
+      execute ibeblock FldType(:fType, :fSubType, :fLen, :fScale, :fSegLen, :fCharLen, :fPrec, 3)
+              returning_values :FieldType;
+      sType = ibec_IIF(IsDomainBased, sType, FieldType);
+
+      if (fNullFlag = 1) then
+        sType = sType || ' <B>NOT NULL</B>';
+
+      if (((fType = 37) or (fType = 14) or (fType = 261)) and (IsDomainBased = FALSE) and (fCharset is not NULL)) then
+      begin
+        sType = sType || ' <B>CHARACTER SET</B> ' || ibec_trim(fCharset);
+      end
+      sType = ibec_IIF(IsDomainBased, sType || ' <I>/* ' || FieldType || ' */</I> ', sType);
+      sDDL = sDDL || '    ' || ibec_trim(FieldName) || ' ' || sType || ',' || ibec_Chr(13) || ibec_chr(10);
+      suspend;
+    end
+    iLen = ibec_Length(sDDL) - 3;
+    sDDL = ibec_Copy(sDDL, 1, iLen);
+    sDDL = sDDL || ');';
+  end
+
+  OldData = ibec_uf_GetFormData(Frm);
+  iPos = ibec_Pos('<P ID="FAKE">', OldData);
+  if (iPos > 0) then
+    OldData = ibec_Copy(OldData, 1, iPos + 12);
+
+  sDDL = OldData || '<P>The DDL of the selected table is:</P><P></P><PRE>' || sDDL || '</DDL>';
+
+  ibec_uf_SetFormData(Frm, sDDL);
+  ibec_uf_SetElementAttribute(Frm, 'TableSelect', 'value', TableID, 0);
+end

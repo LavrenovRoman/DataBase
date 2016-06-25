@@ -1,0 +1,338 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'fbclient.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'fbclient.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'Function name to be copied',
+  DestObjectName variant = '' comment 'Destination function name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyDomains boolean = TRUE comment 'Copy domains',
+  DropFunctionIfExists boolean = FALSE comment 'Try to drop function if the one exists in the destination database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'avx-vaio-ultra/3052:C:\Firebird\newdb.FDB';
+    SrcDBCharset = 'UTF8';
+    SrcDBClientLib = 'D:\TEMP\fbclient.dll';
+  
+    DestDBConnStr = 'avx-vaio-ultra/3052:C:\Firebird\newdb_copy.FDB';
+    DestDBCharset = 'UTF8';
+    DestDBClientLib = 'D:\TEMP\fbclient.dll';
+  
+    SrcObjectName = 'FUNC_ALL_LANGS';
+    DestObjectName = 'FUNC_ALL_LANGS_NEW';
+    DropFunctionIfExists = TRUE;
+  end;
+
+  SrcFuncName = SrcObjectName;
+  DestFuncName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$function_name, rdb$function_source, rdb$deterministic_flag, rdb$description
+           from rdb$functions
+           where (rdb$function_name = :SrcFuncName) and (rdb$package_name is null) and (rdb$module_name is null)
+           into :SrcFuncData;
+
+    if (SrcFuncData['RDB$FUNCTION_NAME'] is null) then
+      exception cant_find_func 'There is no such function (' + :SrcFuncName + ') in the source database.';
+
+    if ((DestFuncName is null) or (DestFuncName = ''))  then
+      DestFuncName = SrcFuncName;
+
+    DestFuncNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestFuncName, '"'), ibec_AnsiUpperCase(:DestFuncName));
+    SrcFuncNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcFuncName, '"'), ibec_AnsiUpperCase(:SrcFuncName));
+
+    ibec_UseConnection(DestDB);
+
+    if (exists(select rdb$function_name from rdb$functions where (rdb$function_name = :DestFuncName) and (rdb$package_name is null) and (rdb$module_name is null))) then
+    begin
+      if (DropFunctionIfExists) then
+      begin
+        DropStmt = 'DROP FUNCTION ' + DestFuncNameFmt;
+
+        try
+          ibec_Progress('Dropping function ' + DestFuncNameFmt + '...');
+          execute statement :DropStmt;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+      else
+        exception func_exists_already 'Function "' + DestFuncName + '" exists in the destination database already.';
+    end
+
+    ibec_UseConnection(SrcDB);
+
+    SelStmt = 'select fa.rdb$argument_name as arg_name,' +
+                     'fa.rdb$argument_position as arg_position,' +
+                     'fa.rdb$field_source as arg_domain,' +
+                     'fa.rdb$description as arg_description,' +
+                     'f.rdb$field_type as dom_type,' +
+                     'f.rdb$field_length as dom_length,' +
+                     'f.rdb$field_sub_type as dom_subtype,' +
+                     'f.rdb$field_scale as dom_scale,' +
+                     'f.rdb$null_flag as dom_null_flag,' +
+                     'f.rdb$character_length as dom_charlen,' +
+                     'f.rdb$segment_length as dom_seglen,' +
+                     'f.rdb$system_flag as dom_system_flag,' +
+                     'f.rdb$computed_source as dom_computedby,' +
+                     'f.rdb$default_source as dom_default,' +
+                     'f.rdb$dimensions as dom_dims,' +
+                     'f.rdb$description as dom_description,' +
+                     'ch.rdb$character_set_name as dom_charset,' +
+                     'ch.rdb$bytes_per_character as charset_bytes,' +
+                     'dco.rdb$collation_name as dom_collation,' +
+                     'f.rdb$field_precision as dom_precision,' +
+                     'fa.rdb$default_source as arg_default_value,' +
+                     'fa.rdb$argument_mechanism as arg_mechanism,' +
+                     'fa.rdb$null_flag as arg_null_flag,' +
+                     'fa.rdb$relation_name as arg_relation_name,' +
+                     'fa.rdb$field_name as arg_field_name' + CRLF +
+                     'from rdb$function_arguments fa ' + CRLF +
+                     'left join rdb$fields f on fa.rdb$field_source = f.rdb$field_name' + CRLF +
+                     'left join rdb$character_sets ch on f.rdb$character_set_id = ch.rdb$character_set_id' + CRLF +
+                     'left join rdb$collations dco on ((f.rdb$collation_id = dco.rdb$collation_id) and (f.rdb$character_set_id = dco.rdb$character_set_id))' + CRLF +
+                     'where (fa.rdb$function_name = ' + ibec_QuotedStr(:SrcFuncName, '''') + ')' + CRLF +
+                     'and (fa.rdb$package_name is null)' + CRLF +
+                     'order by fa.rdb$argument_position';
+
+
+    ibec_Progress('Collecting arguments info...');
+    i = 0;
+    iUserDomainCount = 0;
+    for execute statement SelStmt into :ArgData
+    do
+    begin
+      sArgDomain = ibec_Trim(ArgData['ARG_DOMAIN']);
+      if ((ArgData['ARG_MECHANISM'] = 1) or (ibec_Pos('RDB$', sArgDomain) <> 1))  then
+      begin
+        aDomains[i] = sArgDomain;
+        iUserDomainCount = iUserDomainCount + 1;
+      end;
+
+      if (ArgData['ARG_POSITION'] = 0) then
+        aArgs[i] = 'RETURNS';
+      else
+        aArgs[i] = ibec_Trim(ArgData['ARG_NAME']);
+
+      sType = ibec_IBTypeToStr(ArgData['DOM_TYPE'],
+                               ArgData['DOM_SUBTYPE'],
+                               ArgData['DOM_LENGTH'],
+                               ArgData['DOM_SCALE'],
+                               ArgData['DOM_SEGLEN'],
+                               ArgData['DOM_CHARLEN'],
+                               ArgData['DOM_PRECISION'],
+                               DestDBSQLDialect);
+      aTypes[i] = sType;
+
+      aArgsComment[i] = ArgData['ARG_DESCRIPTION'];
+      aDomainsComputedBy[i] = ArgData['ARG_COMPUTEDBY'];
+      aArgsIsInput[i] = ibec_IIF(ArgData['ARG_POSITION'] > 0, TRUE, FALSE);
+      aArgsMechanism[i] = ArgData['ARG_MECHANISM'];
+      aArgsDefault[i] = ibec_Coalesce(ArgData['ARG_DEFAULT_VALUE'], ArgData['DOM_DEFAULT']);
+      aArgsNullFlag[i] = ibec_Coalesce(ArgData['ARG_NULL_FLAG'], 0);
+      aArgsRelationName[i] = ibec_Coalesce(ArgData['ARG_RELATION_NAME'], '');
+      aArgsFieldName[i] = ibec_Coalesce(ArgData['ARG_FIELD_NAME'], '');
+      i = i + 1;
+    end
+
+    ibec_UseConnection(DestDB);
+    DomainsAreOK = TRUE;
+    if (CopyDomains and (iUserDomainCount > 0)) then
+    begin
+      foreach (aDomains as Dom key DomIdx skip nulls) do
+      begin
+        if (exists(select rdb$field_name from rdb$fields where rdb$field_name = :Dom)) then
+          Continue;
+        DomNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:Dom, '"'), ibec_AnsiUpperCase(:Dom));
+        CreateStmt = 'CREATE DOMAIN ' + DomNameFmt + ' AS ' +  sType;
+        try
+          ibec_Progress('Creating domain ' + DomNameFmt + '...');
+          execute statement :CreateStmt;
+          commit;
+          ibec_Progress(Success);
+
+          DomDesc = ArgData['DOM_DESCRIPTION'];
+          if (DomDesc is not null) then
+          begin
+            sCommentOnDomain = ibec_Format('COMMENT ON DOMAIN %s IS %s', DomNameFmt, ibec_QuotedStr(DomDesc, ''''));
+            ibec_Progress('Setting domain description...');
+            execute statement :sCommentOnDomain;
+            commit;
+            ibec_Progress(Success);
+          end
+        except
+          DomainsAreOK = FALSE;
+          ibec_Progress(Failed);
+          rollback;
+        end;
+      end;
+    end;
+
+
+    sInArgs = '';
+    sReturns = '';
+
+    CreateStmt = 'CREATE FUNCTION ' + DestFuncNameFmt;
+    foreach (aArgs as ArgName index ArgKey skip nulls) do
+    begin
+      sType = '';
+      if (ArgKey = 0) then
+        sArg = 'RETURNS';
+      else
+        sArg = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:ArgName, '"'), ibec_AnsiUpperCase(:ArgName));
+      DomName = aDomains[ArgKey];
+      if (DomName is not null) then
+      begin
+        DomNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DomName, '"'), ibec_AnsiUpperCase(:DomName));
+        if (aArgsMechanism[ArgKey] = 1) then
+        begin
+          if (aArgsRelationName[ArgKey] <> '') then
+          begin
+            RelName = ibec_Trim(aArgsRelationName[ArgKey]);
+            RelNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:RelName, '"'), ibec_AnsiUpperCase(:RelName));
+            FieldName = ibec_Trim(aParamsFieldName[ArgKey]);
+            FieldNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FieldName, '"'), ibec_AnsiUpperCase(:FieldName));
+            sArg .= ' TYPE OF COLUMN ' + RelNameFmt + '.' + FieldNameFmt;
+          end
+          else
+            sArg .= ' TYPE OF ' + DomNameFmt;
+        end
+        else
+          sArg .= ' ' + DomNameFmt;
+      end
+      else
+        sArg .= ' ' + aTypes[ArgKey];
+
+      if (aArgsIsInput[ArgKey]) then
+      begin
+        if (sInArgs <> '') then
+          sInArgs .= ',' + CRLF;
+        sInArgs .= '    ' + sArg;
+        if (aArgsNullFlag[ArgKey] = 1) then
+          sInArgs .= ' NOT NULL';
+        if (aArgsDefault[ArgKey] is not null) then
+        begin
+          sDefault = ibec_Trim(aArgsDefault[ArgKey]);
+          sDefault = ibec_preg_Replace('^(?i)(DEFAULT|\=)[\x01-\x20]+', '', sDefault);
+          sInArgs .= ' DEFAULT ' + sDefault;
+        end;
+      end
+      else
+        sReturns = sArg;
+    end
+    if (sInArgs <> '') then
+      CreateStmt .= ' (' + CRLF + sInArgs + ')';
+    CreateStmt .= CRLF + sReturns;
+    if (SrcFuncData['RDB$DETERMINISTIC_FLAG'] = 1) then
+      CreateStmt .= ' DETERMINISTIC';
+    CreateStmt .= CRLF + 'AS' + CRLF + SrcFuncData['RDB$FUNCTION_SOURCE'];
+
+    ibec_UseConnection(DestDB);
+    try
+      ibec_Progress('Creating function ' + DestFuncNameFmt + '...');
+      execute statement :CreateStmt;
+      commit;
+      ibec_Progress(Success);
+
+      FuncName = ibec_IIF(DestDBSQLDialect = 3, :DestFuncName, ibec_AnsiUpperCase(:DestFuncName));
+      if (SrcFuncData['RDB$DESCRIPTION'] is not null) then
+      begin
+        FuncDesc = SrcFuncData['RDB$DESCRIPTION'];
+        sCommentOnFunc = ibec_Format('COMMENT ON FUNCTION %s IS %s', DestFuncNameFmt, ibec_QuotedStr(FuncDesc, ''''));
+        ibec_Progress('Setting function description...');
+        execute statement :sCommentOnFunc;
+        commit;
+        ibec_Progress(Success);
+      end;
+
+      foreach (aArgsComment as ArgComment key ArgKey skip nulls) do
+      begin
+        ArgName = aArgs[ArgKey];
+        ArgNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:ArgName, '"'), ibec_AnsiUpperCase(:ArgName));
+        sCommentOnArg = ibec_Format('COMMENT ON PARAMETER %s.%s IS %s', DestFuncNameFmt, ArgNameFmt, ibec_QuotedStr(ArgComment, ''''));
+        ibec_progress('Setting description for argument ' + ArgName + '...');
+        execute statement :sCommentOnArg;
+        ibec_Progress(Success);
+      end;
+      commit;
+    except
+      ibec_Progress(Failed);
+      rollback;
+    end;
+
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

@@ -1,0 +1,57 @@
+execute ibeblock
+as
+begin
+  Conn = ibec_GetDefaultConnection();
+  if (Conn is NULL) then
+  begin
+    ibec_ShowMessage('There is no active connection.');
+    Exit;
+  end
+
+  i = 0;
+
+  for select i.rdb$index_name, i.rdb$relation_name, i.rdb$unique_flag,
+             i.rdb$index_inactive, i.rdb$index_type
+      from rdb$indices i
+      left join rdb$relation_constraints rc on (i.rdb$index_name = rc.rdb$index_name)
+      where (i.rdb$system_flag is null) and (rc.rdb$index_name is null)
+      into :IdxName, :IdxRelName, :IdxUnique, :IdxInactive, :IdxType
+  do
+  begin
+    sFields = '';
+    for select rdb$field_name from rdb$index_segments
+        where rdb$index_name = :IdxName
+        order by rdb$field_position
+        into :ifields
+    do
+    begin
+      if (sFields <> '') then
+        sFields = sFields || ', ';
+      sFields = sFields || ibec_formatident(ibec_trim(ifields));
+    end
+
+    DropStmt[i] = 'drop index ' || ibec_formatident(ibec_trim(IdxName));
+    CreateStmt[i] = 'create ' || ibec_iif(IdxUnique = 1, 'unique ', '') || ibec_iif(IdxType = 1, 'descending ', '') ||
+                    ' index ' || ibec_formatident(ibec_trim(IdxName)) ||
+                    ' on ' || ibec_formatident(ibec_trim(IdxRelName)) || ' (' || sFields || ')';
+
+    i = i + 1;
+  end
+
+  i = 0;
+  while (i <= ibec_high(DropStmt)) do
+  begin
+    s = DropStmt[i];
+    ibec_progress(s);
+    execute statement :s;
+    commit;
+  
+    s = CreateStmt[i];
+    ibec_progress(s);
+    execute statement :s;
+    commit;
+
+    i = i + 1;
+  end
+  ibec_ShowMessage(i || ' indices were recreated successfully.');
+end

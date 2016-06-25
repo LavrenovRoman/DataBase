@@ -1,0 +1,34 @@
+execute ibeblock (
+  SetValues smallint = 0,
+  FileStrm variant)
+as
+begin
+  if (FileStrm is not null) then
+    FS = FileStrm;
+  else
+    FS = ibec_fs_OpenFile('E:\BlockScript.sql', __fmCreate);
+
+
+  for select g.rdb$generator_name
+      from rdb$generators g
+      where g.rdb$system_flag is null
+      order by g.rdb$generator_name
+      into :GenName
+  do
+  begin
+    GenName = ibec_trim(GenName);
+    s = 'CREATE GENERATOR ' || GenName || ';';
+    if (SetValues = 1) then
+    begin
+      execute statement 'select gen_id(' || GenName || ', 0) from rdb$database' into :GenValue;
+      s = s || ibec_Chr(13) || ibec_Chr(10) ||
+          'SET GENERATOR ' || GenName || ' TO ' || GenValue || ';';
+    end
+    ibec_progress('Writing generator ' || GenName);
+    ibec_fs_Writeln(FS, s);
+    ibec_fs_Writeln(FS, '');
+  end
+
+  if (FS is null) then
+    ibec_fs_CloseFile(FS);
+end

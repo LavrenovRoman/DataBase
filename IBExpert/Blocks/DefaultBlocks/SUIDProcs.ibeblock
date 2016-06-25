@@ -1,0 +1,243 @@
+/********************************************************************************/
+/*  Following IBEBlock is used by IBExpert to produce text of SUID procedures   */
+/*                                                                              */
+/*              !!! DO NOT CHANGE INPUT/OUTPUT PARAMETER NAMES !!!              */
+/********************************************************************************/
+
+execute ibeblock (
+  TableName       variant comment 'Table name AS IS',
+  TableNameFmt    variant comment 'Formatted table name (quoted, if necessary)',
+  FieldNames      variant comment 'Array of field names (names are quoted, if necessary)',
+  FieldTypes      variant comment 'Array of field types',
+  FieldDomains    variant comment 'Array of field domain names (names are quoted, if necessary)',
+  FieldFlags      variant comment 'Array of field flags. Possible flags:
+                                   K - field is a primary key field
+                                   S - field is marked for select (SELECT procedure)
+                                   I - field is marked for insert (INSERT procedure)
+                                   U - field is marked for update (UPDATE procedure)
+                                   N - field is marked for insert (INSERT/UPDATE procedure)
+                                   P - field is marked for update (INSERT/UPDATE procedure)
+                                   R - field is marked for refresh (refresh procedure)',
+  DatabaseID      variant comment 'ID of associated IBExpert database')
+RETURNS (
+  SelectSPText       variant = ''    comment 'SELECT procedure text',
+  InsertSPText       variant = ''    comment 'INSERT procedure text',
+  UpdateSPText       variant = ''    comment 'UPDATE procedure text',
+  DeleteSPText       variant = ''    comment 'DELETE procedure text',
+  InsertUpdateSPText variant = ''    comment 'INSERT or UPDATE procedure text',
+  RefreshSPText      variant = ''    comment 'Refresh procedure text',
+  DoNotFormat        boolean = FALSE comment 'If TRUE, no additional formatting will be performed by IBExpert')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  DBConn = ibec_GetDefaultConnection();
+  iODSMajor = ibec_GetConnectionProp(DBConn, 'ODSMAJORVERSION');
+  iODSMinor = ibec_GetConnectionProp(DBConn, 'ODSMINORVERSION');
+
+  sNoPrimaryKey = '/* There is no primary key defined for ' + TableNameFmt + ' table */';
+  sNoFieldsSelected = '/* There are no fields selected */';
+
+  ServerVersion = ibec_ibe_GetDatabaseProp(DatabaseID, 'ServerVersion');
+  CRLF = ibec_CRLF();
+  CommaCRLF = ',' + CRLF;
+  CreateProcedure = 'CREATE ' +
+                    ibec_IIF(ServerVersion in (__svFB20, __svFB21, __svFB25, __svFB30), 'OR ALTER ', '') +
+                    'PROCEDURE ';
+
+  WhereClause = '';
+
+  SelectOutputParams = '';
+  SelectFields = '';
+  SelectIntoClause = '';
+
+  InsertInputParams = '';
+  InsertInto = '';
+  InsertValues = '';
+
+  UpdateInputParams = '';
+  UpdateFields = '';
+
+  DelInputParams = '';
+
+  InsUpdInputParams = '';
+  InsUpdInto = '';
+  InsUpdValues = '';
+  InsUpdFields = '';
+
+  RefreshOutputParams = '';
+  RefreshFields = '';
+  RefreshIntoClause = '';
+
+  ParamTypes = null;
+  foreach (FieldNames as Field key FldIdx) do
+  begin
+    ParamTypes[FldIdx] = '';
+    IsUserDomain = (ibec_Copy(FieldDomains[FldIdx], 1, 4) <> 'RDB$');
+
+    if (((ServerVersion = __svFB25) and (iODSMajor >= 11) and (iODSMinor >= 2)) or (ServerVersion = __svFB30))  then
+      ParamTypes[FldIdx] = 'TYPE OF COLUMN ' + TableNameFmt + '.' + Field;
+    else if (IsUserDomain and (ServerVersion in (__svFB21, __svFB25)) and (iODSMajor >= 11) and (iODSMinor >= 1)) then
+      ParamTypes[FldIdx] = 'TYPE OF ' + FieldDomains[FldIdx];
+    else if (IsUserDomain and (ServerVersion = __svFB30)) then
+      ParamTypes[FldIdx] = 'TYPE OF ' + FieldDomains[FldIdx];
+
+    if (ParamTypes[FldIdx] = '') then
+      ParamTypes[FldIdx] = FieldTypes[FldIdx];
+  end;
+
+  foreach (FieldNames as Field key FldIdx) do
+  begin
+    Flags = FieldFlags[FldIdx];
+
+    -- WHERE clause and DELETE procedure parts
+    if (ibec_Pos('K', Flags) > 0) then
+    begin
+      WhereClause    .= ibec_IIF(WhereClause = '', '', ' AND ') + '(' + Field + ' = :' + Field + ')';
+      DelInputParams .= ibec_IIF(DelInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+    end;
+
+    -- SELECT procedure parts
+    if (ibec_Pos('S', Flags) > 0) then
+    begin
+      SelectOutputParams .= ibec_IIF(SelectOutputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      SelectFields       .= ibec_IIF(SelectFields = '', '', CommaCRLF) + '             ' + Field;
+      SelectIntoClause   .= ibec_IIF(SelectIntoClause = '', '', CommaCRLF) + '           :' + Field;
+    end;
+
+    -- INSERT procedure parts
+    if (ibec_Pos('I', Flags) > 0) then
+    begin
+      InsertInputParams .= ibec_IIF(InsertInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      InsertInto        .= ibec_IIF(InsertInto = '', '', CommaCRLF) + '    ' + Field;
+      InsertValues      .= ibec_IIF(InsertValues = '', '', CommaCRLF) + '    :' + Field;
+    end;
+
+    -- UPDATE procedure parts
+    if ((ibec_Pos('K', Flags) > 0) or (ibec_Pos('U', Flags) > 0))  then
+    begin
+      UpdateInputParams .= ibec_IIF(UpdateInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      if (ibec_Pos('U', Flags) > 0)  then
+        UpdateFields .= ibec_IIF(UpdateFields = '', '', CommaCRLF) + '      ' + Field + ' = :' + Field;
+    end;
+
+    -- INSERT or UPDATE procedure parts
+    if ((ibec_Pos('K', Flags) > 0) or (ibec_Pos('N', Flags) > 0) or (ibec_Pos('P', Flags) > 0))  then
+    begin
+      InsUpdInputParams .= ibec_IIF(InsUpdInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      if (ibec_Pos('N', Flags) > 0)  then
+      begin
+        InsUpdInto   .= ibec_IIF(InsUpdInto = '', '', CommaCRLF) + '        ' + Field;
+        InsUpdValues .= ibec_IIF(InsUpdValues = '', '', CommaCRLF) + '        :' + Field;
+      end;
+      if (ibec_Pos('P', Flags) > 0)  then
+        InsUpdFields .= ibec_IIF(InsUpdFields = '', '', CommaCRLF) + '        ' + Field + ' = :' + Field;
+    end;
+
+    -- Refresh procedure parts
+    if (ibec_Pos('R', Flags) > 0) then
+    begin
+      RefreshOutputParams .= ibec_IIF(RefreshOutputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      RefreshFields       .= ibec_IIF(RefreshFields = '', '', CommaCRLF) + '         ' + Field;
+      RefreshIntoClause   .= ibec_IIF(RefreshIntoClause = '', '', CommaCRLF) + '       :' + Field;
+    end;
+  end;
+
+
+  /*IBE_BREAKPOINT - remove this line if you don't need a breakpoint here*/
+  if (SelectOutputParams <> '') then
+    SelectSPText = CreateProcedure + ibec_FormatIdent(TableName + '_SEL') + CRLF +
+                   'RETURNS (' + CRLF +
+                   SelectOutputParams + ')' + CRLF +
+                   'AS' + CRLF +
+                   'BEGIN' + CRLF +
+                   '  FOR SELECT ' + ibec_Trim(SelectFields) + CRLF +
+                   '      FROM ' + TableNameFmt + CRLF +
+                   '      INTO ' + ibec_Trim(SelectIntoClause) + CRLF +
+                   '  DO' + CRLF +
+                   '  BEGIN' + CRLF +
+                   '    SUSPEND;' + CRLF +
+                   '  END' + CRLF +
+                   'END';
+  else
+    SelectSPText = sNoFieldsSelected;
+
+  if (InsertInputParams <> '') then
+    InsertSPText = CreateProcedure + ibec_FormatIdent(TableName + '_INS') + ' (' + CRLF +
+                   InsertInputParams + ')' + CRLF +
+                   'AS' + CRLF +
+                   'BEGIN' + CRLF +
+                   '  INSERT INTO ' + TableNameFmt + ' (' + CRLF +
+                   InsertInto + ')' + CRLF +
+                   '  VALUES (' + CRLF +
+                   InsertValues + ');' + CRLF +
+                   'END';
+  else
+    InsertSPText = sNoFieldsSelected;
+
+  if ((UpdateInputParams <> '')  and (WhereClause <> '') and (UpdateFields <> '')) then
+    UpdateSPText = CreateProcedure + ibec_FormatIdent(TableName + '_UPD') + ' (' + CRLF +
+                   UpdateInputParams + ')' + CRLF +
+                   'AS' + CRLF +
+                   'BEGIN' + CRLF +
+                   '  UPDATE ' + TableNameFmt + CRLF +
+                   '  SET ' + ibec_Trim(UpdateFields) + CRLF +
+                   '  WHERE ' + WhereClause + ';' + CRLF +
+                   'END';
+  else if (WhereClause = '') then
+    UpdateSPText = sNoPrimaryKey;
+  else if (UpdateFields = '') then
+    UpdateSPText = sNoFieldsSelected;
+
+  if ((DelInputParams <> '') and (WhereClause <> '')) then
+    DeleteSPText = CreateProcedure + ibec_FormatIdent(TableName + '_DEL') + ' (' + CRLF +
+                   DelInputParams + ')' + CRLF +
+                   'AS' + CRLF +
+                   'BEGIN' + CRLF +
+                   '  DELETE FROM ' + TableNameFmt + CRLF +
+                   '  WHERE ' + WhereClause + ';' + CRLF +
+                   'END';
+  else if (WhereClause = '') then
+    DeleteSPText = sNoPrimaryKey;
+  else if (DelInputParams = '') then
+    DeleteSPText = sNoFieldsSelected;
+
+  if ((InsUpdInputParams <> '') and (WhereClause <> '')) then
+    InsertUpdateSPText = CreateProcedure + ibec_FormatIdent(TableName + '_IU') + ' (' + CRLF +
+                         InsUpdInputParams + ')' + CRLF +
+                         'AS' + CRLF +
+                         'BEGIN' + CRLF +
+                         '  IF (EXISTS(SELECT ' + FieldNames[0] + ' FROM ' + TableNameFmt + ' WHERE ' + WhereClause + ')) THEN' + CRLF +
+                         '    UPDATE ' + TableNameFmt + CRLF +
+                         '    SET ' + ibec_Trim(InsUpdFields) + CRLF +
+                         '    WHERE ' + WhereClause + ';' + CRLF +
+                         '  ELSE' + CRLF +
+                         '    INSERT INTO ' + TableNameFmt + ' (' + CRLF +
+                         InsUpdInto + ')' + CRLF +
+                         '    VALUES (' + CRLF +
+                         InsUpdValues + ');' + CRLF +
+                         'END';
+  else if (WhereClause = '') then
+    InsertUpdateSPText = sNoPrimaryKey;
+  else if (InsUpdInputParams = '') then
+    InsertUpdateSPText = sNoFieldsSelected;
+
+  if ((RefreshOutputParams <> '') and (WhereClause <> '')) then
+    RefreshSPText = CreateProcedure + ibec_FormatIdent(TableName + '_REF') + ' (' + CRLF +
+                    DelInputParams + ')' + CRLF +
+                    'RETURNS (' + CRLF +
+                    RefreshOutputParams + ')' + CRLF +
+                    'AS' + CRLF +
+                    'BEGIN' + CRLF +
+                    '  SELECT ' + ibec_Trim(RefreshFields) + CRLF +
+                    '  FROM ' + TableNameFmt + CRLF +
+                    '  WHERE ' + ibec_Trim(WhereClause) + CRLF +
+                    '  INTO ' + ibec_Trim(RefreshIntoClause) + ';' + CRLF +
+                    '  SUSPEND;' + CRLF +
+                    'END';
+  else if (WhereClause = '') then
+    RefreshSPText = sNoPrimaryKey;
+  else if (RefreshOutputParams = '') then
+    RefreshSPText = sNoFieldsSelected;
+end

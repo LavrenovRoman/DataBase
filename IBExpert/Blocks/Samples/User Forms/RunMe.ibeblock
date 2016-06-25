@@ -1,0 +1,16 @@
+execute ibeblock (
+  CodeDir varchar(1000) = 'E:\IBEBlocks\' comment 'Path to necessary IBEBlocks')
+as
+begin
+
+  FrmBlock = ibec_LoadFromFile(CodeDir || 'TableDDL.ibeblock');
+
+  Block1 = ibec_LoadFromFile(CodeDir || 'InputForm.ibeblock');
+  execute ibeblock Block1 returning_values :MyPage;
+
+  MyFrm = ibec_uf_CreateForm(MyPage);
+  if (MyFrm is not null) then
+  begin
+    Res = ibec_uf_ShowForm(MyFrm, 'Caption="Select table from the list below"; Top=100; Height=600; BarTitle="Super Puper Form!"', FrmBlock);
+  end
+end

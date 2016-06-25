@@ -1,0 +1,79 @@
+-- !!! DO NOT CHANGE INPUT/OUTPUT PARAMETER NAMES !!!
+execute ibeblock (
+  TableName     variant,
+  Pages         variant,
+  Slots         variant,
+  Fill          variant,
+  DPUsage       variant,
+  Records       variant,
+  RecordLen     variant,
+  Versions      variant,
+  VersionLen    variant,
+  MaxVersions   variant,
+  FD_0_19       variant,
+  FD_20_39      variant,
+  FD_40_59      variant,
+  FD_60_79      variant,
+  FD_80_99      variant,
+  DBPageSize    variant)
+returns (
+  TableIsEmpty variant = FALSE,
+  TableIsFragmented variant = FALSE,
+  TableIsTooBig variant = FALSE,
+  TableNameProps variant,
+  PagesProps variant,
+  SizeProps variant,
+  SlotsProps variant,
+  FillProps variant,
+  DPUsageProps variant,
+  RecordsProps variant,
+  RecordLenProps variant,
+  VersionsProps variant,
+  VersionLenProps variant,
+  MaxVersionsProps variant,
+  FD_0_19_Props variant,
+  FD_20_39_Props variant,
+  FD_40_59_Props variant,
+  FD_60_79_Props variant,
+  FD_80_99_Props variant)
+as
+begin
+  CellColor  = 0;
+  FontColor  = 1;
+  FontBold   = 2;
+  FontItalic = 3;
+  CellHint   = 4;
+
+  TableSize = Pages * DBPageSize;
+
+  -- Fragmented table (TableSize is greater than 200 KB and Fill is less than 60%)
+  if ((TableSize > (200 * 1024)) and (Fill < 60))  then
+  begin
+    TableIsFragmented = TRUE;
+    FillProps[CellColor] = 60138;
+    FillProps[FontColor] = 0;
+    FillProps[FontBold] = TRUE;
+    FillProps[CellHint] = 'Table ' + TableName + ' is fragmented';
+  end;
+
+  -- Empty table
+  if (Pages = 0) then
+  begin
+    TableIsEmpty = TRUE;
+    PagesProps[CellColor] = 60138;
+    PagesProps[FontColor] = 0;
+    PagesProps[FontBold] = TRUE;
+    PagesProps[CellHint] = 'Table ' + TableName + ' is empty (has no records)';
+  end;
+
+  -- Too big table (TableSize is > 30 Gb)
+  if ((((TableSize / 1024) / 1024) / 1024) > 30) then
+  begin
+    TableIsTooBig = TRUE;
+    SizeProps[CellColor] = 7697919;
+    SizeProps[FontColor] = 0;
+    SizeProps[FontBold] = TRUE;
+    SizeProps[CellHint] = 'Table ' + TableName + ' is too big. Its size is greater than 30 Gb.';
+  end;
+  suspend;
+end

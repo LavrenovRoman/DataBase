@@ -1,0 +1,101 @@
+execute ibeblock (
+   FType integer,
+   FSubType integer,
+   FLen integer,
+   FScale integer, 
+   FSegmentSize integer,
+   FCharLen integer,
+   FPrecision integer,
+   SQLDialect integer = 3)
+returns (TypeAsString varchar(200))
+as
+begin
+  TypeAsString = '';
+  if ((FCharLen = 0) or (FCharLen is NULL)) then
+    FCharLen = FLen;
+
+  if (FType = 261) then
+    TypeAsString = ibec_Concat('BLOB SUB_TYPE ', FSubType, ' SEGMENT SIZE ', FSegmentSize);
+  else if (FType = 14) then
+    TypeAsString = 'CHAR(' || FCharLen || ')';
+  else if (FType = 37) then
+    TypeAsString = 'VARCHAR(' || FCharLen || ')';
+  else if (FType = 12) then
+    TypeAsString = 'DATE';
+  else if (FType = 13) then
+    TypeAsString = 'TIME';
+  else if (FType = 35) then
+  begin
+    if (SQLDialect = 3) then
+      TypeAsString = 'TIMESTAMP';
+    else
+      TypeAsString = 'DATE';
+  end
+  else if (FType = 7) then
+  begin
+    if ((FScale < 0) or (FSubType = 1) or (FSubType = 2)) then
+    begin
+      if (FSubType = 2) then
+        TypeAsString = 'DECIMAL';
+      else
+        TypeAsString = 'NUMERIC';
+      if (FPrecision > 0) then
+        TypeAsString = TypeAsString || '(' || FPrecision || ',' || (FScale * -1) || ')';
+      else
+        TypeAsString = TypeAsString || '(4,' || (FScale * -1) || ')';
+    end
+    else
+      TypeAsString = 'SMALLINT';
+  end
+  else if (FType = 8) then
+  begin
+    if ((FScale < 0) or (FSubType = 1) or (FSubType = 2)) then
+    begin
+      if (FSubType = 2) then
+        TypeAsString = 'DECIMAL';
+      else
+        TypeAsString = 'NUMERIC';
+      if (FPrecision > 0) then
+        TypeAsString = TypeAsString || '(' || FPrecision || ',' || (FScale * -1) || ')';
+      else
+        TypeAsString = TypeAsString || '(9,' || (FScale * -1) || ')';
+    end
+    else
+      TypeAsString = 'INTEGER';
+  end
+  else if (FType = 27) then
+  begin
+    if ((FScale < 0) or (FSubType = 1) or (FSubType = 2)) then
+    begin
+      if (FSubType = 2) then
+        TypeAsString = 'DECIMAL';
+      else
+        TypeAsString = 'NUMERIC';
+      if (FPrecision > 0) then
+        TypeAsString = TypeAsString || '(' || FPrecision || ',' || (FScale * -1) || ')';
+      else
+        TypeAsString = TypeAsString || '(9,' || (FScale * -1) || ')';
+    end
+    else
+      TypeAsString = 'DOUBLE PRECISION';
+  end
+  else if (FType = 16) then
+  begin
+    if ((FScale < 0) or (FSubType = 1) or (FSubType = 2)) then
+    begin
+      if (FSubType = 2) then
+        TypeAsString = 'DECIMAL';
+      else
+        TypeAsString = 'NUMERIC';
+      if (FPrecision > 0) then
+        TypeAsString = TypeAsString || '(' || FPrecision || ',' || (FScale * -1) || ')';
+      else
+        TypeAsString = TypeAsString || '(18,' || (FScale * -1) || ')';
+    end
+    else
+      TypeAsString = 'BIGINT';
+  end
+  else if (FType = 10) then
+    TypeAsString = 'FLOAT';
+  suspend;
+end

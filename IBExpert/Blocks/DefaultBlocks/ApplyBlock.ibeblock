@@ -1,0 +1,169 @@
+execute ibeblock (
+  ActionID variant,
+  SelectedNames variant,
+  SelectedNamesFmt variant,
+  SelectedTypes variant,
+  ParentName variant = '',
+  ParentNameFmt variant = '',
+  ParentType variant)
+RETURNS (
+  ActionCaptions variant,
+  ActionDescriptions variant,
+  CloseForm boolean = FALSE)
+as
+begin
+  CRLF = ibec_CRLF();
+
+  sDesc = '<b>%s</b> <hr>This is description for <i>%s</i>. <p><b>HTML allowed!</b>';
+
+  if (SelectedTypes[0] = __dboDatabase) then
+  begin
+    ActionCaptions[11]  = 'Database(s) example';
+    ActionDescriptions[11]  = ibec_StringReplace(sDesc, '%s', ActionCaptions[11], __rfIgnoreCase + __rfReplaceAll);
+  end
+  else if (SelectedTypes[0] = __dboDomain) then
+  begin
+    ActionCaptions[21]  = 'Domain(s) example #1';
+    ActionDescriptions[21]  = ibec_StringReplace(sDesc, '%s', ActionCaptions[21], __rfIgnoreCase + __rfReplaceAll);
+    ActionCaptions[22]  = 'Domain(s) example #2';
+    ActionCaptions[23]  = 'Domain(s) example #3';
+  end;
+  else if (SelectedTypes[0] = __dboTable) then
+  begin
+    ActionCaptions[31] = 'Table(s) example #1';
+    ActionDescriptions[31]  = ibec_StringReplace(sDesc, '%s', ActionCaptions[31], __rfIgnoreCase + __rfReplaceAll);
+    ActionCaptions[32] = 'Table(s) example #2';
+    ActionCaptions[33] = 'Table(s) example #3';
+  end;
+  else if (SelectedTypes[0] = __dboView) then
+  begin
+    ActionCaptions[41] = 'Compose a Recreate script for selected views';
+    ActionDescriptions[41]  = ibec_StringReplace(sDesc, '%s', ActionCaptions[41], __rfIgnoreCase + __rfReplaceAll);
+    ActionCaptions[42] = 'View(s) example #2';
+  end;
+  else if (SelectedTypes[0] = __dboProcedure) then
+  begin
+    ActionCaptions[51] = 'Procedure(s) example';
+  end;
+  else if (SelectedTypes[0] = __dboTrigger) then
+  begin
+    ActionCaptions[61] = 'Trigger(s) example';
+  end;
+  else if (SelectedTypes[0] = __dboGenerator) then
+  begin
+    ActionCaptions[71] = 'Generator(s) example';
+  end;
+  else if (SelectedTypes[0] = __dboException) then
+  begin
+    ActionCaptions[81] = 'Exception(s) example';
+  end;
+  else if (SelectedTypes[0] = __dboFunction) then
+  begin
+    ActionCaptions[91] = 'Function(s) example';
+  end;
+  else if (SelectedTypes[0] = __dboRole) then
+  begin
+    ActionCaptions[101] = 'Role(s) example';
+  end;
+  else if (SelectedTypes[0] = __dboIndex) then
+  begin
+    ActionCaptions[111] = 'Index(es) example';
+  end;
+
+  if (ActionID is null) then
+  begin
+    suspend;
+    exit;
+  end;
+
+  CloseForm = FALSE;
+
+  sCap = ActionCaptions[ActionID];
+  if (sCap is null) then
+    sCap = '(no caption defined for the action)';
+  sMes = 'Block ' + ibec_QuotedStr(sCap, '"') + CRLF + 'will be executed after your confirmation.' + CRLF +
+         'Are you sure?';
+
+  if (ibec_MessageDlg(sMes, __mtConfirmation, __mbYes + __mbNo) <> __mrYes) then
+    Exit;
+
+  ibec_Progress('Executing block...');
+
+  if (ActionID = 41) then -- Compose a Recreate Script for selected views
+  begin
+    try
+      db = ibec_GetDefaultConnection();
+      sViews = '';
+      foreach (SelectedNames as ViewName key ViewID) do
+      begin
+        sViews .= ViewName + ';';
+      end;
+  
+      cbb = 'execute ibeblock (MsgData variant)
+             as
+             begin
+               ibec_Progress(MsgData);
+             end';
+      sDDL = ibec_GetViewRecreateScript(db, sViews, 'GenerateConnect; IncludePassword;
+                                                     DontUseSetTerm; UseCreateOrAlter; SupressComments=FALSE', cbb);
+
+      sMes = 'Recreate script was created successfully.' + CRLF + 'Do you want to execute the script?';
+      if (ibec_MessageDlg(sMes, __mtConfirmation, __mbYes + __mbNo) = __mrYes) then
+      begin
+        cbb = 'execute ibeblock (BlockData variant)
+               as
+               begin
+                 sMessage = BlockData;
+                 if (sMessage is not null) then
+                   ibec_Progress(''SQL Script: '' + sMessage);
+               end';
+        ibec_Progress('');
+        ibec_Progress('Executing SQL script...');
+        db = ibec_GetDefaultConnection();
+        sMes = ibec_ExecSQLScript(db, sDDL, '', cbb);
+        if (sMes is null) then
+        begin
+          ibec_MessageDlg('Script executed successfully!', __mtInformation, __mbOK);
+          --CloseForm = TRUE;
+        end;
+      end
+      else
+      begin
+        --CloseForm = TRUE;
+        ibec_ibe_PerformAction(null, 'OpenScript', sDDL);
+      end
+      --CloseForm = TRUE;
+    except
+      CloseForm = FALSE;
+    end;
+    Exit;
+  end;
+
+  if (SelectedTypes[0] = __dboDatabase) then
+  begin
+    s = 'Action ID: ' || ActionID || CRLF || CRLF || 'Following databases were selected' || CRLF ||
+      '=================================' || CRLF;
+    foreach (SelectedNames as DBID key IDIdx) do
+    begin
+      DBAlias = ibec_ibe_GetDatabaseProp(DBID, 'Alias');
+      IsActive = ibec_ibe_GetDatabaseProp(DBID, 'Active');
+      ibec_Progress('Processing ' + DBAlias + '...');
+      if (IsActive) then
+        s .= '*** ';
+      s .= DBAlias + CRLF;
+    end;
+  end;
+  else
+  begin
+    s = 'Action ID: ' || ActionID || CRLF || CRLF || 'Following objects were selected' || CRLF ||
+      '=================================' || CRLF;
+    foreach (SelectedNames as SelName key NameIdx) do
+    begin
+      ibec_Progress('Processing ' + SelName + '...');
+      s .= SelName + CRLF;
+    end;
+  end;
+
+  ibec_Progress(CRLF + 'That''s all, folks!');
+  ibec_ShowMessage(s);
+end

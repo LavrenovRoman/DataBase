@@ -1,0 +1,354 @@
+execute ibeblock (
+-- Don't change names of following parameters! -------------------------------------------------
+  SrcDBConnStr variant comment 'Source DB connection string',
+  SrcDBUserName variant = 'SYSDBA' comment 'Source DB user name',
+  SrcDBPassword variant = 'masterkey' comment 'Source DB password',
+  SrcDBCharset variant = 'NONE' comment 'Source DB connection charset',
+  SrcDBClientLib variant = 'gds32.dll' comment 'Source DB client library name',
+  DestDBConnStr variant comment 'Destination DB connection string',
+  DestDBUserName variant = 'SYSDBA' comment 'Destination DB user name',
+  DestDBPassword variant = 'masterkey' comment 'Destination DB password',
+  DestDBCharset variant = 'NONE' comment 'Destination DB connection charset',
+  DestDBClientLib variant = 'gds32.dll' comment 'Destination DB client library name',
+  SrcObjectName variant = '' comment 'View name to be copied',
+  DestObjectName variant = '' comment 'Destination view name, leave empty if no changes need',
+  DebugMode boolean = TRUE,
+------------------------------------------------------------------------------------------------
+  CopyTriggers boolean = TRUE comment 'Copy view triggers',
+  CopyGenerators boolean = TRUE comment 'Copy generators used within view triggers',
+  DropViewIfExists boolean = FALSE comment 'Try to drop view if the one exists in the destination database')
+as
+begin
+  Time1 = ibec_GetTickCount();
+
+  CRLF = ibec_CRLF();
+  BS = ibec_Chr(8);
+  Success = BS + ' Successful.';
+  Failed = BS + ' FAILED!';
+
+
+  if (DebugMode) then
+  begin
+    SrcDBConnStr = 'AVX-MAIN:D:\FB2_DATA\IBEHELP.FBA';
+    SrcDBCharset = 'WIN1251';
+    SrcDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    DestDBConnStr = 'AVX-MAIN:D:\FB2_DATA\FORMTEST.FDB';
+    DestDBCharset = 'WIN1251';
+    DestDBClientLib = 'C:\Program Files\Firebird\bin\fbclient.dll';
+  
+    SrcObjectName = 'SYSTEM_OBJECTS';
+    DestObjectName = 'SYSTEM_OBJECTS';
+    DropTableIfExists = TRUE;
+  end;
+
+  SrcViewName = SrcObjectName;
+  DestViewName = DestObjectName;
+
+
+  SrcDBParams = 'DBName=' + SrcDBConnStr + ';' +
+                'User=' + SrcDBUserName + ';' +
+                'Password=' + SrcDBPassword + ';' +
+                'Names=' + SrcDBCharset + ';' +
+                'ClientLib=' + SrcDBClientLib;
+  
+  DestDBParams = 'DBName=' + DestDBConnStr + ';' +
+                 'User=' + DestDBUserName + ';' +
+                 'Password=' + DestDBPassword + ';' +
+                 'Names=' + DestDBCharset + ';' +
+                 'ClientLib=' + DestDBClientLib;
+
+  try
+    try
+      ibec_Progress('Connecting to ' + SrcDBConnStr + '...');
+      SrcDB = ibec_CreateConnection(__ctFirebird, SrcDBParams);
+      ibec_Progress(Success);
+      SrcDBSQLDialect = ibec_GetConnectionProp(SrcDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+  
+    try
+      ibec_Progress('Connecting to ' + DestDBConnStr + '...');
+      DestDB = ibec_CreateConnection(__ctFirebird, DestDBParams);
+      ibec_Progress(Success);
+      DestDBSQLDialect = ibec_GetConnectionProp(DestDB, 'DBSQLDialect');
+    except
+      ibec_Progress(Failed);
+      raise;
+      Exit;
+    end;
+
+    ibec_UseConnection(SrcDB);
+
+    select rdb$relation_name, rdb$view_source, rdb$system_flag, rdb$description
+           from rdb$relations
+           where (rdb$view_blr is not null) and (rdb$relation_name = :SrcViewName)
+           into :SrcViewData;
+
+    if (SrcViewData['RDB$RELATION_NAME'] is null) then
+      exception cant_find_view 'There is no such view (' + :SrcViewName + ') in the source database.';
+    IsSys = SrcViewData['RDB$SYSTEM_FLAG'] = 1;
+    if (IsSys) then
+      exception cant_copy_system_view 'Cannot copy a system view.';
+
+    if ((DestViewName is null) or (DestViewName = ''))  then
+      DestViewName = SrcViewName;
+
+    DestViewNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:DestViewName, '"'), ibec_AnsiUpperCase(:DestViewName));
+    SrcViewNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:SrcViewName, '"'), ibec_AnsiUpperCase(:SrcViewName));
+
+    ibec_UseConnection(DestDB);
+
+    bUseCommentOn = exists(select rdb$relation_name from rdb$relations where (rdb$relation_name = 'RDB$PACKAGES'));
+
+    if (exists(select rdb$relation_name from rdb$relations where rdb$relation_name = :DestViewName)) then
+    begin
+      if (DropViewIfExists) then
+      begin
+        DropStmt = 'DROP VIEW ' + DestViewNameFmt;
+
+        try
+          ibec_Progress('Dropping view ' + DestViewNameFmt + '...');
+          execute statement :DropStmt;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+          raise;
+        end;
+      end
+      else
+        exception view_exists_already 'View "' + DestViewName + '" exists in the destination database already.';
+    end
+
+    ibec_UseConnection(SrcDB);
+
+    SelStmt = 'select rf.rdb$field_name as fld_name,' + CRLF +
+                     'rf.rdb$description as fld_description' + CRLF +
+              'from rdb$relation_fields rf ' + CRLF +
+              'where rf.rdb$relation_name = ' + ibec_QuotedStr(:SrcViewName, '''') + CRLF +
+              'order by rf.rdb$field_position';
+
+
+    i = 0;
+    for execute statement SelStmt into :FldData
+    do
+    begin
+      s = ibec_Trim(FldData['FLD_NAME']);
+      aFields[i] = ibec_Trim(FldData['FLD_NAME']);
+      aFieldsComment[i] = FldData['FLD_DESCRIPTION'];
+      i = i + 1;
+    end
+
+    ibec_UseConnection(DestDB);
+
+    FieldsList = '';
+
+    CreateStmt = 'CREATE VIEW ' + DestViewNameFmt;
+    foreach (aFields as FldName index FldKey skip nulls) do
+    begin
+      if (FieldsList <> '') then
+        FieldsList .= ',' + CRLF;
+      FldNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FldName, '"'), ibec_AnsiUpperCase(:FldName));
+      FieldsList .= FldNameFmt;
+    end
+    CreateStmt .= ' (' + CRLF + FieldsList + ')' + CRLF + 'AS' + CRLF + SrcViewData['RDB$VIEW_SOURCE'];
+
+    ibec_UseConnection(DestDB);
+    try
+      ibec_Progress('Creating view ' + DestViewNameFmt + '...');
+      execute statement :CreateStmt;
+      commit;
+      ibec_Progress(Success);
+
+      ViewName = ibec_IIF(DestDBSQLDialect = 3, :DestViewName, ibec_AnsiUpperCase(:DestViewName));
+
+      if (SrcViewData['RDB$DESCRIPTION'] is not null) then
+      begin
+        ViewComment = SrcViewData['RDB$DESCRIPTION'];
+        sCommentOnView = ibec_Format('COMMENT ON VIEW %s IS %s', DestViewNameFmt, ibec_QuotedStr(ViewComment, ''''));
+        if (bUseCommentOn) then
+          execute statement :sCommentOnView;
+        else
+          update rdb$relations set rdb$description = :ViewComment where (rdb$relation_name = :ViewName);
+      end;
+
+      foreach (aFieldsComment as FldComment key FldKey skip nulls) do
+      begin
+        FldName = aFields[FldKey];
+        FldNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:FldName, '"'), ibec_AnsiUpperCase(:FldName));
+        sCommentOnColumn = ibec_Format('COMMENT ON COLUMN %s.%s IS %s', DestViewNameFmt, FldNameFmt, ibec_QuotedStr(:FldComment, ''''));
+        if (bUseCommentOn) then
+          execute statement :sCommentOnColumn;
+        else
+          update rdb$relation_fields set rdb$description = :FldComment
+                 where (rdb$relation_name = :ViewName) and (rdb$field_name = :FldName);
+      end;
+      commit;
+    except
+      ibec_Progress(Failed);
+      rollback;
+      raise;
+    end;
+
+
+    if (CopyTriggers or CopyGenerators) then
+    begin
+      ibec_UseConnection(SrcDB);
+      ViewName = ibec_IIF(SrcDBSQLDialect = 3, :SrcViewName, ibec_AnsiUpperCase(:SrcViewName));
+      i = 0;
+      ibec_Progress('Collecting triggers info...');
+      for select T.RDB$TRIGGER_NAME, T.RDB$TRIGGER_TYPE, T.RDB$TRIGGER_SEQUENCE,
+                 T.RDB$TRIGGER_INACTIVE, T.RDB$TRIGGER_SOURCE
+          from RDB$TRIGGERS T
+          left join RDB$CHECK_CONSTRAINTS C on C.RDB$TRIGGER_NAME = T.RDB$TRIGGER_NAME
+          where ((T.RDB$SYSTEM_FLAG = 0) or (T.RDB$SYSTEM_FLAG is null)) and
+                (C.rdb$trigger_name is null) and (T.RDB$RELATION_NAME = :TblName)
+          order by T.RDB$TRIGGER_NAME
+          into :TrgData
+      do
+      begin
+        aTriggerNames[i] = ibec_Trim(TrgData['RDB$TRIGGER_NAME']);
+        aTriggerTypes[i] = ibec_IBTriggerTypeToStr(TrgData['RDB$TRIGGER_TYPE']);
+        aTriggerPositions[i] = TrgData['RDB$TRIGGER_SEQUENCE'];
+        aTriggerInactives[i] = ibec_IIF(TrgData['RDB$TRIGGER_INACTIVE'] = 1, 'INACTIVE', 'ACTIVE');
+        aTriggerSources[i] = TrgData['RDB$TRIGGER_SOURCE'];
+        i = i + 1;
+      end;
+
+      -----------------------------------------------------
+      -- COLLECTING GENERATOR NAMES USED WITHIN TRIGGERS
+      -----------------------------------------------------
+
+      i = 0;
+      ibec_Progress('Searching trigger bodies for used generators...');
+      foreach (aTriggerNames as TrgName key TrgKey skip nulls) do
+      begin
+        TrgSrc = aTriggerSources[TrgKey];
+        TrgNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:TrgName, '"'), ibec_AnsiUpperCase(:TrgName));
+        TrgDDL = 'CREATE TRIGGER ' + TrgNameFmt + ' FOR ' + SrcViewNameFmt + CRLF +
+                 aTriggerTypes[TrgKey] + ' POSITION ' + ibec_Cast(aTriggerPositions[TrgKey], __typeString) + CRLF + TrgSrc;
+        PSQLParser = ibec_psql_Parse(TrgDDL, SrcDBSqlDialect, __svFB20);
+        try
+          if (ibec_psql_ErrorCount(PSQLParser) = 0) then
+          begin
+            iCount = ibec_psql_UsedObjects(PSQLParser, ObjNames, ObjTypes);
+            if (iCount > 0) then
+            begin
+              foreach (ObjNames as ObjName key ObjKey skip nulls) do
+                if (ObjTypes[ObjKey] = __dboGenerator) then
+                  if (ibec_IndexOfValue(Generators, ObjName) is null) then
+                  begin
+                    Generators[i] = ObjName;
+                    i = i + 1;
+                  end;
+            end;
+          end;
+        finally
+          ibec_psql_Free(PSQLParser);
+        end;
+      end;
+
+      -------------------------------------------------------
+      -- CREATING GENERATORS AND SETTING THEIR VALUES
+      -------------------------------------------------------
+
+      ibec_Progress('Creating and initting generators...');
+      foreach (Generators as GenName key GenKey skip nulls) do
+      begin
+        ibec_UseConnection(DestDB);
+        if (exists(select rdb$generator_name from rdb$generators where rdb$generator_name = :GenName)) then
+          Continue;
+
+        ibec_UseConnection(SrcDB);
+        GenNameFmt = ibec_IIF(SrcDBSQLDialect = 3, ibec_QuotedStr(:GenName, '"'), ibec_AnsiUpperCase(:GenName));
+        GetGenValueStmt = 'SELECT GEN_ID(' + GenNameFmt + ', 0) FROM RDB$DATABASE';
+        execute statement GetGenValueStmt into :GenValue;
+
+        GenNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:GenName, '"'), ibec_AnsiUpperCase(:GenName));
+        CreateGenStmt = 'CREATE GENERATOR ' + GenNameFmt;
+        SetGenStmt = 'SET GENERATOR ' + GenNameFmt + ' TO ' + ibec_Cast(:GenValue, __typeString);
+
+        ibec_UseConnection(DestDB);
+        try
+          ibec_Progress('    ' + GenNameFmt + '...');
+          execute statement CreateGenStmt;
+          commit;
+          execute statement SetGenStmt;
+          commit;
+          ibec_Progress(Success);
+        except
+          ibec_Progress(Failed);
+          rollback;
+        end;
+      end;
+    end;
+
+    if (CopyTriggers) then
+    begin
+      ibec_UseConnection(DestDb);
+      ibec_Progress('Creating triggers...');
+      foreach (aTriggerNames as TrgName key TrgKey skip nulls) do
+      begin
+        if (SrcViewName <> DestViewName) then
+          TrgName = ibec_preg_Replace('(?i)' + SrcViewName, DestViewName, TrgName);
+        TrgNameFmt = ibec_IIF(DestDBSQLDialect = 3, ibec_QuotedStr(:TrgName, '"'), ibec_AnsiUpperCase(:TrgName));
+        CreateTrgStmt = 'CREATE TRIGGER ' + TrgNameFmt + ' FOR ' + DestViewNameFmt + CRLF +
+                        aTriggerInactives[TrgKey] + ' ' + aTriggerTypes[TrgKey] + ' POSITION ' + ibec_Cast(aTriggerPositions[TrgKey], __typeString) + CRLF +
+                        aTriggerSources[TrgKey];
+
+        WasError = FALSE;
+        try
+          ibec_Progress('    ' + TrgNameFmt + '...');
+          execute statement :CreateTrgStmt;
+          commit;
+          ibec_Progress(BS + ' Successfull.');
+        except
+          ibec_Progress(BS + ' FAILED!');
+          WasError = TRUE;
+          rollback;
+        end;
+
+        if (WasError) then
+        begin
+          ibec_Progress('    Attempt to create trigger ' + TrgNameFmt + ' with commented body...');
+          PSQLParser = ibec_psql_Parse(CreateTrgStmt, DestDBSqlDialect, __svFB20);
+          try
+            CreateTrgStmt = ibec_psql_CommentBody(PSQLParser);
+          finally
+            ibec_psql_Free(PSQLParser);
+          end;
+          try
+            execute statement :CreateTrgStmt;
+            ibec_Progress(BS + ' Successfull.');
+            commit;
+          except
+            ibec_Progress('    Failed.');
+            rollback;
+          end;
+        end;
+      end;
+    end;
+
+  finally
+    if (SrcDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + SrcDBConnStr + '...');
+      ibec_CloseConnection(SrcDB);
+    end;
+    if (DestDB is not null) then
+    begin
+      ibec_Progress('Closing connection to ' + DestDBConnStr + '...');
+      ibec_CloseConnection(DestDB);
+    end;
+    Time2 = ibec_GetTickCount();
+    sTime = ibec_div((Time2 - Time1), 1000) || '.' ||ibec_mod((Time2 - Time1), 1000);
+    ibec_Progress('Finished.');
+    ibec_Progress('Total time spent: ' || sTime || ' seconds');
+    ibec_Progress('That''s all, folks!');
+  end;
+end

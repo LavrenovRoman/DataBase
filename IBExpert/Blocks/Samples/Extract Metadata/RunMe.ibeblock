@@ -1,0 +1,21 @@
+execute ibeblock ExtractMetadata (
+  CodeDir varchar(1000) = 'E:\IBEBlocks\' comment 'Path to necessary IBEBlocks',
+  ScriptFile varchar(1000) = 'E:\BlockScript.sql' comment 'Name of the script file')
+returns (TimeAll float)
+as
+begin
+  Time1 = ibec_GetTickCount();
+  SPExtr = ibec_LoadFromFile(CodeDir || 'SPExtract.ibeblock');
+  DomExtract = ibec_LoadFromFile(CodeDir || 'DomExtract.ibeblock');
+  GensExtract = ibec_LoadFromFile(CodeDir || 'GensExtract.ibeblock');
+
+  FS = ibec_fs_OpenFile(ScriptFile, __fmCreate);
+  execute ibeblock DomExtract (FS);
+  execute ibeblock GensExtract (1, FS);
+  execute ibeblock SPExtr (CodeDir, 'CREATE', 3, TRUE, FS);
+  execute ibeblock SPExtr (CodeDir, 'ALTER', 3, FALSE, FS);
+  ibec_fs_CloseFile(FS);
+  Time2 = ibec_GetTickCount();
+  TimeAll = (Time2 - Time1) / 1000;
+  suspend;
+end
